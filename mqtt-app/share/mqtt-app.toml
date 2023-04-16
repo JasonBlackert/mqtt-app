@@ -1,0 +1,52 @@
+[mqtt-app]
+log_level = 'INFO'
+
+[mqtt]
+# The host address and port number of the local broker.
+host = 'localhost'
+port =  1883
+
+[gateways]
+GW000 = "0.0.0.0"
+
+[list]
+header = [
+    "#",
+    "Gateway",
+    "MAC Address",
+    "SOC",
+    "MinCell_V",
+    "MaxCell_V",
+    "VPV",
+    "IPV",
+    "P_PV",
+    "VBAT",
+    "IBAT",
+    "P_BAT",
+    "VOUT",
+    "IOUT",
+    "P_OUT",
+    "VCOM",
+    "VOUT_X",
+    "FET_T",
+    "TEMP_PCB",
+    "Time",
+]
+
+names = [
+    "VPV",
+    "IPV",
+    "P_PV",
+    "VBAT",
+    "IBAT",
+    "VOUT",
+    "IOUT",
+    "P_OUT",
+    "VCOM",
+    "VOUT_X",
+    "FET_T",
+    "TEMP_PCB",
+    "BMS_SOC",
+    "BMS_Min_Cell_V",
+    "BMS_Max_Cell_V",
+]
