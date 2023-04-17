@@ -28,6 +28,7 @@ from PyQt5.QtWidgets import (
 
 from broker import MQTT_Broker
 from config import parse_args
+from commands import Commands
 
 args = parse_args()
 config = args.config
@@ -43,37 +44,24 @@ FONT_SIZE = 8
 FONT = QFont("Courier")
 FONT.setPointSize(FONT_SIZE)
 
-HEADER = config["list"]["header"]
-NAMES = config["list"]["names"]
-
-class Commands:
-    def __init__(self, broker):
-        self.broker = broker
-
-    def enable_fast(self, mac):
-        self.broker.publish("Yotta/cmd", payload="fast 1")
-
-    def plot_fast(self):
-        print("Fast")
-
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
-
         self.brokers = self._init_brokers()
         self.cmd = Commands(self.brokers)
+        self.tabs: dict[int, str] = dict()
+        self.tables: dict[int, QTableWidget] = dict()
+        self.threads: dict[str, UpdateTableThread] = dict()
 
         self._initUI()
         self._init_menubar()
 
-        #self.pop_up()
-
     def _init_brokers(self) -> dict[str, MQTT_Broker]:
-        brokers: dict[str: MQTT_Broker] = dict()
-        broker_dict =  config["gateways"]
-        for name, host   in broker_dict.items():
+        brokers: dict[str:MQTT_Broker] = dict()
+        broker_dict = config["gateways"]
+        for name, host in broker_dict.items():
             try:
                 broker = MQTT_Broker(broker_dict[f"{name}"])
                 broker.start()
@@ -120,6 +108,8 @@ class MainWindow(QMainWindow):
 
         # TODO: Add Commands(class)
         # Command Menu
+        findUnitAction = QAction("Find Unit", self)
+        findUnitAction.triggered.connect(self.cmd.find_unit)
         plotFastDataAction = QAction("Plot Fast", self)
         plotFastDataAction.triggered.connect(self.cmd.plot_fast)
         refreshAction = QAction("Current Tab", self)
@@ -127,6 +117,7 @@ class MainWindow(QMainWindow):
         fileMenu = menubar.addMenu("Command")
         fileMenu.addAction(refreshAction)
         fileMenu.addAction(plotFastDataAction)
+        fileMenu.addAction(findUnitAction)
 
     def pop_up(self):
         self.dialog = QDialog(self)
@@ -134,12 +125,12 @@ class MainWindow(QMainWindow):
         self.dialog.setGeometry(100, 200, 300, 100)
 
         combo_box = QComboBox()
-        for gw, broker in self.brokers.items():
-            combo_box.addItem(gw)
+        for gateway, broker in self.brokers.items():
+            combo_box.addItem(gateway)
 
         label = QLabel("Select Gateway")
         button = QPushButton("Select")
-        button.clicked.connect(self.add_tab)
+        button.clicked.connect(lambda: self.add_tab(self.tab_menu.count()))
 
         layout = QVBoxLayout()
         layout.addWidget(label)
@@ -150,76 +141,54 @@ class MainWindow(QMainWindow):
 
         self.dialog.exec_()
 
-    def add_tab(self):
-        self.tab = Tab(self, self.tab_menu)
+    def add_tab(self, index):
+        # Track Current Tab Based on Index
+        self.dialog.accept()
+        gateway = self.sender().parent().findChild(QComboBox).currentText()
+        self.tabs[index] = gateway
+        print(self.tabs)
 
-    def close_tab(self, index):
-        # Get the widget of the closed tab
-        widget_to_remove = self.tab_menu.widget(index)
-        self.tab_menu.removeTab(index)
-        widget_to_remove.deleteLater()
-
-        self.tab.close(index)
-
-    def current_tab(self, tab_index):
-        current_index = self.tab_menu.currentIndex()
-        print(current_index)
-        return current_index == tab_index
-
-
-class Tab:
-    def __init__(self, MainWindow, tab_menu):
-        self.mw = MainWindow
-        self.tab_menu = tab_menu
-
-        Leaves = {}
-
-        self.tab = QWidget()
-        self.table = QTableWidget()
-        self.table.setColumnCount(len(HEADER))
-        self.table.setHorizontalHeaderLabels(HEADER)
+        tab = QWidget()
+        table = QTableWidget()
+        table.setColumnCount(len(config["list"]["header"]))
+        table.setHorizontalHeaderLabels(config["list"]["header"])
         style = "background-color: rgb(200, 200, 200); border: none;"
-        self.table.setStyleSheet(f"QHeaderView::section { {style}}")
+        table.setStyleSheet(f"QHeaderView::section { {style}}")
 
         # Table Style
-        self.table.verticalHeader().setVisible(False)
-        self.table.setShowGrid(False)
+        table.verticalHeader().setVisible(False)
+        table.setShowGrid(False)
 
-        self.table.horizontalHeader().setFont(FONT)
-        font = self.table.horizontalHeader().font()
+        table.horizontalHeader().setFont(FONT)
+        font = table.horizontalHeader().font()
         font.setBold(True)
-        self.table.horizontalHeader().setFont(font)
+        table.horizontalHeader().setFont(font)
+        self.tables[gateway] = table
 
         # Add Table to Tab Layout
         tab_layout = QVBoxLayout()
-        tab_layout.addWidget(self.table)
-        self.tab.setLayout(tab_layout)
+        tab_layout.addWidget(table)
+        tab.setLayout(tab_layout)
 
-        # Find Current Gateway
-        gateway = self.mw.sender().parent().findChild(QComboBox).currentText()
-        self.mw.dialog.accept()
-
-        self.tab_menu.addTab(self.tab, gateway)
+        self.tab_menu.addTab(tab, gateway)
 
         # Initialize Specific Broker
-        self.broker = self.mw.brokers[gateway]
+        broker = self.brokers[gateway]
+        thread = UpdateTableThread(broker, gateway, self.tabs)
+        thread.signal.connect(self.add_item_to_table)
+        thread.start()
 
-        #self.broker = MQTT_Broker(config["gateways"][f"{gateway}"])
-        #self.broker.start()
-
-        self.thread = UpdateTableThread(
-            self.table, self.broker, gateway, Leaves
-        )
-        self.thread.new_item.connect(self.add_item_to_table)
-        self.thread.start()
+        self.threads[gateway] = thread
 
         # Set New Tab as Current Tab
         self.tab_menu.setCurrentIndex(self.tab_menu.count() - 1)
 
-    def add_item_to_table(self, table, item):
+    def add_item_to_table(self, gateway, item):
         # Add a new item to the table widget
+        if gateway not in self.tabs.values():
+            return
 
-        # currTable = self.tab_menu.currentWidget().layout().itemAt(0).widget()
+        table = self.tables[gateway]
         index = int(item[0]) - 1
 
         # Implement New Entry
@@ -242,34 +211,43 @@ class Tab:
             height = table.rowHeight(row)
             table.setRowHeight(row, height)
 
-    def close(self, gateway_host):
-        if self.thread.isFinished:
-            self.thread.quit()
-        #self.broker.stop(gateway_host)
+    def close_tab(self, index):
+        # Get the widget of the closed tab
+        widget_to_remove = self.tab_menu.widget(index)
+        self.tab_menu.removeTab(index)
+        widget_to_remove.deleteLater()
+
+        thread = self.threads[self.tabs[index]]
+        if thread.isFinished:
+            thread.quit()
+            # thread.terminate()
+
+        print(f"deleting {index} from {self.tabs[index]}")
+        del self.tabs[index]
+
+    def current_tab(self, tab_index):
+        current_index = self.tab_menu.currentIndex()
+        print(current_index)
+        return current_index == tab_index
 
 
 class UpdateTableThread(QThread):
-    new_item = pyqtSignal(QTableWidget, list)
+    signal = pyqtSignal(str, list)
 
-    def __init__(self, table, broker, gateway, Leaves):
+    def __init__(self, broker, gateway, tabs):
         super().__init__()
 
-        self.table = table
         self.broker = broker
         self.gateway = gateway
-        self.Leaves = Leaves
 
-        self.previous = ""
+        self.Leaves: dict[str, SolarLEAF] = dict()
 
     def run(self):
-        # self.broker.publish(cmd="getid")  # For Testing Remove Upon Completion
+        self.broker.publish(cmd="getid")  # For Testing Remove Upon Completion
         while True:
-            while not self.broker.queue.empty():
-                data = self.broker.queue.get()
-                self.new_item.emit(
-                    self.table,
-                    self.process_leaf(self.gateway, data),
-                )
+            # while not self.broker.queue.empty():
+            data = self.broker.queue.get()
+            self.signal.emit(self.gateway, self.process(self.gateway, data))
 
             time.sleep(0.1)
 
@@ -277,7 +255,7 @@ class UpdateTableThread(QThread):
         if name in data.keys():
             setattr(leaf, name, data[name])
 
-    def process_leaf(self, gateway, msg):
+    def process(self, gateway, msg):
         if re.match("Yotta/............/", msg.topic):
             mac, topic = msg_parts = msg.topic.split("/")[1:3]
 
@@ -287,8 +265,11 @@ class UpdateTableThread(QThread):
 
             if topic == "json":
                 if "type" in (data := json.loads(msg.payload)):
-                    [self.set_value(leaf, data, name) for name in NAMES]
-                    print(data)
+                    [
+                        self.set_value(leaf, data, name)
+                        for name in config["list"]["names"]
+                    ]
+                    # print(data)
 
             return leaf.items()
 
