@@ -146,7 +146,6 @@ class MainWindow(QMainWindow):
         self.dialog.accept()
         gateway = self.sender().parent().findChild(QComboBox).currentText()
         self.tabs[index] = gateway
-        print(self.tabs)
 
         tab = QWidget()
         table = QTableWidget()
@@ -154,11 +153,9 @@ class MainWindow(QMainWindow):
         table.setHorizontalHeaderLabels(config["list"]["header"])
         style = "background-color: rgb(200, 200, 200); border: none;"
         table.setStyleSheet(f"QHeaderView::section { {style}}")
-
-        # Table Style
-        table.verticalHeader().setVisible(False)
         table.setShowGrid(False)
 
+        # Fonts
         table.horizontalHeader().setFont(FONT)
         font = table.horizontalHeader().font()
         font.setBold(True)
@@ -200,7 +197,7 @@ class MainWindow(QMainWindow):
         for i, value in enumerate(item):
             currEntry = QTableWidgetItem(str(value))
             currEntry.setFont(FONT)
-            table.setItem(index, i, currEntry)
+            table.setItem(index, i - 1, currEntry)
 
         # Resize to Contents
         table.resizeRowsToContents()
