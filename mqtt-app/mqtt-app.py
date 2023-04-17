@@ -15,6 +15,7 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QTabWidget,
     QComboBox,
+    QLineEdit,
     QDialog,
     QWidget,
     QLabel,
@@ -28,7 +29,6 @@ from PyQt5.QtWidgets import (
 
 from broker import MQTT_Broker
 from config import parse_args
-from commands import Commands
 
 args = parse_args()
 config = args.config
@@ -50,7 +50,6 @@ class MainWindow(QMainWindow):
         super().__init__()
 
         self.brokers = self._init_brokers()
-        self.cmd = Commands(self.brokers)
         self.tabs: dict[int, str] = dict()
         self.tables: dict[int, QTableWidget] = dict()
         self.threads: dict[str, UpdateTableThread] = dict()
@@ -82,15 +81,6 @@ class MainWindow(QMainWindow):
         self.tabMenu.tabCloseRequested.connect(self.close_tab)
         self.setCentralWidget(self.tabMenu)
 
-        # Layout
-        layout = QHBoxLayout()
-        layout.addWidget(self.tabMenu)
-
-        # Create a central widget and set the layout
-        central_widget = QWidget()
-        central_widget.setLayout(layout)
-        self.setCentralWidget(central_widget)
-
         # Set Geometry
         self.setGeometry(100, 100, 1800, 400)
 
@@ -101,7 +91,7 @@ class MainWindow(QMainWindow):
         # File Menu
         menuAdd = QMenu("Add", self)
         tab_action = QAction("Gateway", self)
-        tab_action.triggered.connect(self.pop_up)
+        tab_action.triggered.connect(self.add_gateway_dialog)
         menuAdd.addAction(tab_action)
         fileMenu = menubar.addMenu("File")
         fileMenu.addMenu(menuAdd)
@@ -109,9 +99,9 @@ class MainWindow(QMainWindow):
         # TODO: Add Commands(class)
         # Command Menu
         findUnitAction = QAction("Find Unit", self)
-        findUnitAction.triggered.connect(self.cmd.find_unit)
+        findUnitAction.triggered.connect(self.find_solarleaf_dialog)
         plotFastDataAction = QAction("Plot Fast", self)
-        plotFastDataAction.triggered.connect(self.cmd.plot_fast)
+        plotFastDataAction.triggered.connect(self.plot_fast)
         refreshAction = QAction("Current Tab", self)
         refreshAction.triggered.connect(self.current_tab)
         fileMenu = menubar.addMenu("Command")
@@ -119,10 +109,10 @@ class MainWindow(QMainWindow):
         fileMenu.addAction(plotFastDataAction)
         fileMenu.addAction(findUnitAction)
 
-    def pop_up(self):
-        self.dialog = QDialog(self)
-        self.dialog.setWindowTitle("Gateway")
-        self.dialog.setGeometry(100, 200, 300, 100)
+    def add_gateway_dialog(self):
+        self.gw_dialog = QDialog(self)
+        self.gw_dialog.setWindowTitle("Gateway")
+        self.gw_dialog.setGeometry(100, 200, 300, 100)
 
         combo_box = QComboBox()
         for gateway, broker in self.brokers.items():
@@ -137,37 +127,49 @@ class MainWindow(QMainWindow):
         layout.addWidget(combo_box)
         layout.addWidget(button)
 
-        self.dialog.setLayout(layout)
+        self.gw_dialog.setLayout(layout)
 
-        self.dialog.exec_()
+        self.gw_dialog.exec_()
+
+    def find_solarleaf_dialog(self):
+        self.sl_dialog = QDialog(self)
+        self.sl_dialog.setWindowTitle("SolarLeaf")
+        self.sl_dialog.setGeometry(100, 200, 300, 100)
+
+        label = QLabel("Enter SolarLeaf")
+        input_line = QLineEdit("aabbccddeeff")
+        button = QPushButton("Select")
+        button.clicked.connect(self.current_row)
+
+        layout = QVBoxLayout()
+        layout.addWidget(label)
+        layout.addWidget(input_line)
+        layout.addWidget(button)
+
+        self.sl_dialog.setLayout(layout)
+
+        self.sl_dialog.exec_()
 
     def add_tab(self, index):
         # Track Current Tab Based on Index
-        self.dialog.accept()
-        gateway = self.sender().parent().findChild(QComboBox).currentText()
+        self.gw_dialog.accept()
+        gateway = self.gw_dialog.findChild(QComboBox).currentText()
         self.tabs[index] = gateway
 
-        tab = QWidget()
         table = QTableWidget()
+        self.tabMenu.addTab(table, gateway)
+        self.tables[gateway] = table
+
+        # Style and Fonts
         table.setColumnCount(len(config["list"]["header"]))
         table.setHorizontalHeaderLabels(config["list"]["header"])
         style = "background-color: rgb(200, 200, 200); border: none;"
         table.setStyleSheet(f"QHeaderView::section { {style}}")
         table.setShowGrid(False)
-
-        # Fonts
         table.horizontalHeader().setFont(FONT)
         font = table.horizontalHeader().font()
         font.setBold(True)
         table.horizontalHeader().setFont(font)
-        self.tables[gateway] = table
-
-        # Add Table to Tab Layout
-        tab_layout = QVBoxLayout()
-        tab_layout.addWidget(table)
-        tab.setLayout(tab_layout)
-
-        self.tabMenu.addTab(tab, gateway)
 
         # Initialize Specific Broker
         broker = self.brokers[gateway]
@@ -186,6 +188,7 @@ class MainWindow(QMainWindow):
 
         table = self.tables[gateway]
         index = int(item[0]) - 1
+        del item[0]
 
         # Implement New Entry
         row_count = table.rowCount()
@@ -196,7 +199,7 @@ class MainWindow(QMainWindow):
         for i, value in enumerate(item):
             currEntry = QTableWidgetItem(str(value))
             currEntry.setFont(FONT)
-            table.setItem(index, i - 1, currEntry)  # i-1 to not display index
+            table.setItem(index, i, currEntry)  # i-1 to not display index
 
         # Resize to Contents
         table.resizeRowsToContents()
@@ -224,6 +227,51 @@ class MainWindow(QMainWindow):
         except:
             pass
         return current_index == tab_index
+
+    def current_row(self):
+        mac = self.sl_dialog.findChild(QLineEdit).text()
+        if len(mac) != 12:
+            print("MAC Address Length Not Correct")
+            return
+        elif len(mac) == 0:
+            print("Enter a MAC Address")
+            return
+
+        # Valid Input - Continue
+        self.sl_dialog.accept()
+        print(mac)
+
+    def find_selected_unit(self):
+        current_index = self.tabMenu.currentIndex()
+        if current_index == -1:
+            return
+
+        gateway = self.tabs[current_index]
+        table = self.tables[gateway]
+
+        selected = table.selectedItems()
+        if len(selected) > 0:
+            row = selected[0].row()
+            print("Selected row:", row + 1)
+
+            items = [
+                table.item(row, column).text()
+                for column in range(table.columnCount())
+            ]
+
+            print(items)
+        else:
+            print("No row selected.")
+
+        return items
+
+    def plot_fast(self):
+        data = self.find_selected_unit()
+        gateway, mac = (data[0], data[1])
+        broker = self.brokers[gateway]
+        broker.publish(
+            f"Yotta/'{mac}'/cmd", payload="fast 1"
+        )  # "fast_period 1")
 
 
 class UpdateTableThread(QThread):
