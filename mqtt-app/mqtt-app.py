@@ -2,6 +2,9 @@ import re
 import sys
 import time
 import json
+import logging
+
+from typing import Dict
 
 from PyQt5.QtCore import pyqtSignal, QThread
 from PyQt5.QtGui import QFont, QFontMetrics
@@ -29,6 +32,11 @@ from config import parse_args
 args = parse_args()
 config = args.config
 
+lvl = "INFO"
+log = logging.getLogger(__name__)
+logging.basicConfig(level=lvl, format="%(name)s [%(levelname)s]: %(message)s")
+
+
 TIMEOUT = 65
 
 FONT_SIZE = 8
@@ -38,15 +46,43 @@ FONT.setPointSize(FONT_SIZE)
 HEADER = config["list"]["header"]
 NAMES = config["list"]["names"]
 
+class Commands:
+    def __init__(self, broker):
+        self.broker = broker
+
+    def enable_fast(self, mac):
+        self.broker.publish("Yotta/cmd", payload="fast 1")
+
+    def plot_fast(self):
+        print("Fast")
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
+
+        self.brokers = self._init_brokers()
+        self.cmd = Commands(self.brokers)
+
         self._initUI()
         self._init_menubar()
 
-        self.pop_up()
+        #self.pop_up()
+
+    def _init_brokers(self) -> dict[str, MQTT_Broker]:
+        brokers: dict[str: MQTT_Broker] = dict()
+        broker_dict =  config["gateways"]
+        for name, host   in broker_dict.items():
+            try:
+                broker = MQTT_Broker(broker_dict[f"{name}"])
+                broker.start()
+            except Exception as err:
+                log.info(f"Couldn't connect to {name}@{host} error: {err}")
+            else:
+                brokers[f"{name}"] = broker
+
+        return brokers
 
     def _initUI(self):
         # Set Title
@@ -84,10 +120,13 @@ class MainWindow(QMainWindow):
 
         # TODO: Add Commands(class)
         # Command Menu
+        plotFastDataAction = QAction("Plot Fast", self)
+        plotFastDataAction.triggered.connect(self.cmd.plot_fast)
         refreshAction = QAction("Current Tab", self)
         refreshAction.triggered.connect(self.current_tab)
         fileMenu = menubar.addMenu("Command")
         fileMenu.addAction(refreshAction)
+        fileMenu.addAction(plotFastDataAction)
 
     def pop_up(self):
         self.dialog = QDialog(self)
@@ -95,7 +134,7 @@ class MainWindow(QMainWindow):
         self.dialog.setGeometry(100, 200, 300, 100)
 
         combo_box = QComboBox()
-        for gw in config["gateways"]:
+        for gw, broker in self.brokers.items():
             combo_box.addItem(gw)
 
         label = QLabel("Select Gateway")
@@ -163,8 +202,10 @@ class Tab:
         self.tab_menu.addTab(self.tab, gateway)
 
         # Initialize Specific Broker
-        self.broker = MQTT_Broker(config["gateways"][f"{gateway}"])
-        self.broker.start()
+        self.broker = self.mw.brokers[gateway]
+
+        #self.broker = MQTT_Broker(config["gateways"][f"{gateway}"])
+        #self.broker.start()
 
         self.thread = UpdateTableThread(
             self.table, self.broker, gateway, Leaves
@@ -204,7 +245,7 @@ class Tab:
     def close(self, gateway_host):
         if self.thread.isFinished:
             self.thread.quit()
-        self.broker.stop(gateway_host)
+        #self.broker.stop(gateway_host)
 
 
 class UpdateTableThread(QThread):
