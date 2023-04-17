@@ -77,14 +77,14 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("On the Wall")
 
         # Create a tab widget
-        self.tab_menu = QTabWidget()
-        self.tab_menu.setTabsClosable(True)
-        self.tab_menu.tabCloseRequested.connect(self.close_tab)
-        self.setCentralWidget(self.tab_menu)
+        self.tabMenu = QTabWidget()
+        self.tabMenu.setTabsClosable(True)
+        self.tabMenu.tabCloseRequested.connect(self.close_tab)
+        self.setCentralWidget(self.tabMenu)
 
         # Layout
         layout = QHBoxLayout()
-        layout.addWidget(self.tab_menu)
+        layout.addWidget(self.tabMenu)
 
         # Create a central widget and set the layout
         central_widget = QWidget()
@@ -130,7 +130,7 @@ class MainWindow(QMainWindow):
 
         label = QLabel("Select Gateway")
         button = QPushButton("Select")
-        button.clicked.connect(lambda: self.add_tab(self.tab_menu.count()))
+        button.clicked.connect(lambda: self.add_tab(self.tabMenu.count()))
 
         layout = QVBoxLayout()
         layout.addWidget(label)
@@ -167,18 +167,17 @@ class MainWindow(QMainWindow):
         tab_layout.addWidget(table)
         tab.setLayout(tab_layout)
 
-        self.tab_menu.addTab(tab, gateway)
+        self.tabMenu.addTab(tab, gateway)
 
         # Initialize Specific Broker
         broker = self.brokers[gateway]
         thread = UpdateTableThread(broker, gateway, self.tabs)
         thread.signal.connect(self.add_item_to_table)
         thread.start()
-
         self.threads[gateway] = thread
 
         # Set New Tab as Current Tab
-        self.tab_menu.setCurrentIndex(self.tab_menu.count() - 1)
+        self.tabMenu.setCurrentIndex(self.tabMenu.count() - 1)
 
     def add_item_to_table(self, gateway, item):
         # Add a new item to the table widget
@@ -197,45 +196,46 @@ class MainWindow(QMainWindow):
         for i, value in enumerate(item):
             currEntry = QTableWidgetItem(str(value))
             currEntry.setFont(FONT)
-            table.setItem(index, i - 1, currEntry)
+            table.setItem(index, i - 1, currEntry)  # i-1 to not display index
 
         # Resize to Contents
         table.resizeRowsToContents()
         table.resizeColumnsToContents()
-
-        # set maximum row height to readjusted size
         for row in range(table.rowCount()):
             height = table.rowHeight(row)
             table.setRowHeight(row, height)
 
     def close_tab(self, index):
         # Get the widget of the closed tab
-        widget_to_remove = self.tab_menu.widget(index)
-        self.tab_menu.removeTab(index)
+        widget_to_remove = self.tabMenu.widget(index)
+        self.tabMenu.removeTab(index)
         widget_to_remove.deleteLater()
 
         thread = self.threads[self.tabs[index]]
         if thread.isFinished:
             thread.quit()
-            # thread.terminate()
 
-        print(f"deleting {index} from {self.tabs[index]}")
         del self.tabs[index]
 
     def current_tab(self, tab_index):
-        current_index = self.tab_menu.currentIndex()
-        print(current_index)
+        current_index = self.tabMenu.currentIndex()
+        try:
+            print(current_index, self.tabs[tab_index])
+        except:
+            pass
         return current_index == tab_index
 
 
 class UpdateTableThread(QThread):
     signal = pyqtSignal(str, list)
+    stop = pyqtSignal()
 
     def __init__(self, broker, gateway, tabs):
         super().__init__()
 
         self.broker = broker
         self.gateway = gateway
+        self.tabs = tabs
 
         self.Leaves: dict[str, SolarLEAF] = dict()
 
@@ -246,7 +246,12 @@ class UpdateTableThread(QThread):
             data = self.broker.queue.get()
             self.signal.emit(self.gateway, self.process(self.gateway, data))
 
+            if self.gateway not in self.tabs.values():
+                break
+
             time.sleep(0.1)
+
+        print(f"Thread terminated for {self.gateway}")
 
     def set_value(self, leaf, data, name: str):
         if name in data.keys():
