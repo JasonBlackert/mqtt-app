@@ -25,6 +25,7 @@ class MQTT_Broker:
         self.client.on_message = self.on_message
 
         self.queue = Queue()
+        self.available = True
 
     def on_connect(self, client, userdata, flags, rc):
         log.info(f"Broker: {self.host} connected with result code {str(rc)}")
@@ -47,3 +48,11 @@ class MQTT_Broker:
 
     def publish(self, topic: str = "Yotta/cmd", cmd: str = "getid"):
         self.client.publish(topic, cmd)
+
+    def get(self):
+        if self.available:
+            self.available = False
+            msg = self.queue.get()
+            self.available = True
+
+        return msg
