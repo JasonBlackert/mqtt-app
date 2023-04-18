@@ -3,8 +3,12 @@ import sys
 import time
 import json
 import logging
+import numpy as np
 
 from typing import Dict
+
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
 
 from PyQt5.QtCore import pyqtSignal, QThread
 from PyQt5.QtGui import QFont, QFontMetrics
@@ -325,7 +329,7 @@ class MainWindow(QMainWindow):
         dialog = LineGraphDialog(data)
 
         # Show the dialog and run the application
-        dialog.show()
+        dialog.exec_()
         # sys.exit(app.exec_())
 
         self.cmds.disable_fast(broker, mac)
@@ -378,6 +382,28 @@ class UpdateTableThread(QThread):
                     # print(data)
 
             return leaf.items()
+
+
+class LineGraphDialog(QDialog):
+    def __init__(self, data, parent=None):
+        super(LineGraphDialog, self).__init__(parent)
+
+        # Set up the Matplotlib figure and canvas
+        self.figure = Figure(figsize=(5, 5), dpi=100)
+        self.canvas = FigureCanvas(self.figure)
+        self.axes = self.figure.add_subplot(111)
+
+        # Plot the data as a line graph
+        x = np.arange(len(data))
+        self.axes.plot(x, data)
+
+        # Set up the layout
+        layout = QVBoxLayout()
+        layout.addWidget(self.canvas)
+        self.setLayout(layout)
+
+        # Set the dialog size
+        self.resize(500, 500)
 
 
 if __name__ == "__main__":
