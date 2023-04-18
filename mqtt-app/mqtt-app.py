@@ -156,16 +156,17 @@ class MainWindow(QMainWindow):
         self.gw_dialog.setWindowTitle("Gateway")
         self.gw_dialog.setGeometry(100, 200, 300, 100)
 
-        combo_box = QComboBox()
-        for gateway, broker in self.brokers.items():
-            combo_box.addItem(gateway)
-
         button = QPushButton("Select")
         button.clicked.connect(lambda: self.add_tab(self.tabMenu.count()))
 
+        self.combo_box = QComboBox()
+        for gateway, broker in self.brokers.items():
+            if not gateway in self.tabs.values():
+                self.combo_box.addItem(gateway)
+
         layout = QVBoxLayout()
         layout.addWidget(QLabel("Select Gateway"))
-        layout.addWidget(combo_box)
+        layout.addWidget(self.combo_box)
         layout.addWidget(button)
 
         self.gw_dialog.setLayout(layout)
@@ -174,7 +175,7 @@ class MainWindow(QMainWindow):
     def add_tab(self, index):
         # Track Current Tab Based on Index
         self.gw_dialog.accept()
-        gateway = self.gw_dialog.findChild(QComboBox).currentText()
+        gateway = self.combo_box.currentText()
         self.tabs[index] = gateway
 
         table = QTableWidget(itemClicked=self.selected_unit)
@@ -233,19 +234,13 @@ class MainWindow(QMainWindow):
         if thread.isFinished:
             thread.quit()
 
-        self.tabMenu.removeTab(index)
+        new_tabs: dict = dict()
         del self.tabs[index]
         for key, value in self.tabs.items():
-            key -= 1
+            new_tabs[key - 1] = value
+        self.tabs = new_tabs
 
-    def curr_tab(self, tab_index):
-        current_index = self.tabMenu.currentIndex()
-        try:
-            print(current_index, self.tabs[tab_index])
-        except:
-            pass
-        else:
-            return current_index == tab_index
+        self.tabMenu.removeTab(index)
 
     def find_popup(self):
         self.sl_dialog = QDialog(self)
