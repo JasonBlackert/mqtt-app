@@ -45,6 +45,18 @@ FONT = QFont("Courier")
 FONT.setPointSize(FONT_SIZE)
 
 
+class Commands:
+    def enable_fast(self, broker, mac):
+        # broker.publish(f"Yotta/'{mac}'/cmd", payload="fast 1")
+        # broker.publish(f"Yotta/'{mac}'/cmd", payload="fast_period 1")
+        pass
+
+    def disable_fast(self, broker, mac):
+        # broker.publish(f"Yotta/'{mac}'/cmd", payload="fast 0")
+        # broker.publish(f"Yotta/'{mac}'/cmd", payload="fast_period 0")
+        pass
+
+
 class SolarLEAF:
     def __init__(self, gateway, macaddr, index):
         self.index = index
@@ -91,6 +103,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
+        self.cmds = Commands()
         self.brokers = self._init_brokers()
         self.tabs: dict[int, str] = dict()
         self.tables: dict[int, QTableWidget] = dict()
@@ -124,18 +137,17 @@ class MainWindow(QMainWindow):
 
         # File Menu
         fMenu = self.menuBar().addMenu("File")
-        fMenu.addAction(QAction("Add Gateway", self, triggered=self.add_unit))
+        fMenu.addAction(QAction("Add Gateway", self, triggered=self.add_popup))
 
         # Command Menu
         cmdMenu = self.menuBar().addMenu("Command")
-        # cmdMenu.addAction(QAction("Current Tab", self, triggered=self.curr_tab))
+        cmdMenu.addAction(QAction("Find Unit", self, triggered=self.find_popup))
         cmdMenu.addAction(QAction("Plot Fast", self, triggered=self.plot_fast))
-        cmdMenu.addAction(QAction("Find Unit", self, triggered=self.find_unit))
 
         # Set Geometry
         self.setGeometry(100, 100, 1400, 400)
 
-    def add_unit(self):
+    def add_popup(self):
         self.gw_dialog = QDialog(self)
         self.gw_dialog.setWindowTitle("Gateway")
         self.gw_dialog.setGeometry(100, 200, 300, 100)
@@ -155,26 +167,13 @@ class MainWindow(QMainWindow):
         self.gw_dialog.setLayout(layout)
         self.gw_dialog.exec_()
 
-    def find_unit(self):
-        self.sl_dialog = QDialog(self)
-        self.sl_dialog.setWindowTitle("SolarLeaf")
-        self.sl_dialog.setGeometry(100, 200, 300, 100)
-
-        layout = QVBoxLayout()
-        layout.addWidget(QLabel("Enter SolarLeaf"))
-        layout.addWidget(QLineEdit("aabbccddeeff"))
-        layout.addWidget(QPushButton("Select", clicked=self.current_row))
-
-        self.sl_dialog.setLayout(layout)
-        self.sl_dialog.exec_()
-
     def add_tab(self, index):
         # Track Current Tab Based on Index
         self.gw_dialog.accept()
         gateway = self.gw_dialog.findChild(QComboBox).currentText()
         self.tabs[index] = gateway
 
-        table = QTableWidget()
+        table = QTableWidget(itemClicked=self.selected_unit)
         self.tables[gateway] = table
         self.tabMenu.addTab(table, gateway)
 
@@ -232,6 +231,8 @@ class MainWindow(QMainWindow):
 
         self.tabMenu.removeTab(index)
         del self.tabs[index]
+        for key, value in self.tabs.items():
+            key -= 1
 
     def curr_tab(self, tab_index):
         current_index = self.tabMenu.currentIndex()
@@ -242,53 +243,92 @@ class MainWindow(QMainWindow):
         else:
             return current_index == tab_index
 
-    def current_row(self):
+    def find_popup(self):
+        self.sl_dialog = QDialog(self)
+        self.sl_dialog.setWindowTitle("SolarLeaf")
+        self.sl_dialog.setGeometry(100, 200, 300, 100)
+
+        layout = QVBoxLayout()
+        layout.addWidget(QLabel("Enter SolarLeaf"))
+        layout.addWidget(QLineEdit("24d7eb516930"))
+        layout.addWidget(QPushButton("Select", clicked=self.search_gateways))
+
+        self.sl_dialog.setLayout(layout)
+        self.sl_dialog.exec_()
+
+    def user_input_find(self):
         mac = self.sl_dialog.findChild(QLineEdit).text()
         if len(mac) != 12:
             print("MAC Address Length Not Correct")
             return
-        elif len(mac) == 0:
-            print("Enter a MAC Address")
-            return
 
-        # Valid Input - Continue
+        # Continue Because Input is Valid
         self.sl_dialog.accept()
-        print(mac)
 
-    def find_selected_unit(self):
+        return mac
+
+    def search_gateways(self):
+        mac_to_find = self.user_input_find()
+        print(f"Looking for mac: {mac_to_find}")
+
+        for gateway, broker in self.brokers.items():
+            broker.publish("Yotta/cmd", "getid")
+
+            time.sleep(5)
+            while not broker.queue.empty():
+                msg = broker.get()
+                mac = msg_parts = msg.topic.split("/")[1]
+                if mac == mac_to_find:
+                    self.found_on_gateway = gateway
+                    print(f"Found {mac_to_find} on {self.found_on_gateway}")
+                    return self.found_on_gateway
+                else:
+                    print(f"{gateway} - {mac} does not match {mac_to_find}")
+
+        print(f"{mac_to_find} not found on any gateway")
+
+    def selected_unit(self):
         current_index = self.tabMenu.currentIndex()
         if current_index == -1:
+            print("Add a tab and select a row to continue")
             return
 
         gateway = self.tabs[current_index]
         table = self.tables[gateway]
 
         selected = table.selectedItems()
-        if len(selected) > 0:
-            row = selected[0].row()
-            print("Selected row:", row + 1)
-
-            items = [
-                table.item(row, column).text()
-                for column in range(table.columnCount())
-            ]
-
-            print(items)
-        else:
+        if not len(selected) > 0:
             print("No row selected.")
+            return
 
+        row = selected[0].row()
+        cols = table.columnCount()
+        items = [table.item(row, col).text() for col in range(cols)]
+
+        print(f"Selected {items[1]} on row {row+1} on {items[0]}")
         return items
 
     def plot_fast(self):
-        current_index = self.tabMenu.currentIndex()
-        if current_index == -1:
+        data = self.selected_unit()
+        if not data:
             return
 
-        data = self.find_selected_unit()
         gateway, mac = (data[0], data[1])
         broker = self.brokers[gateway]
-        broker.publish(f"Yotta/'{mac}'/cmd", payload="fast 1")
-        # broker.publish(f"Yotta/'{mac}'/cmd", payload="fast_period 1")
+
+        self.cmds.enable_fast(broker, mac)
+
+        # Example data
+        data = [1, 2, 3, 4, 5]
+
+        # Set up the Qt application and dialog
+        dialog = LineGraphDialog(data)
+
+        # Show the dialog and run the application
+        dialog.show()
+        # sys.exit(app.exec_())
+
+        self.cmds.disable_fast(broker, mac)
 
 
 class UpdateTableThread(QThread):
@@ -307,12 +347,11 @@ class UpdateTableThread(QThread):
     def run(self):
         self.broker.publish(cmd="getid")  # For Testing Remove Upon Completion
         while True:
-            # while not self.broker.queue.empty():
-            data = self.broker.queue.get()
+            data = self.broker.get()
             self.signal.emit(self.gateway, self.process(self.gateway, data))
 
             if self.gateway not in self.tabs.values():
-                break
+                return
 
             time.sleep(0.1)
 
