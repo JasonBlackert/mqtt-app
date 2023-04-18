@@ -45,6 +45,48 @@ FONT = QFont("Courier")
 FONT.setPointSize(FONT_SIZE)
 
 
+class SolarLEAF:
+    def __init__(self, gateway, macaddr, index):
+        self.index = index
+        self.mac = macaddr
+        self.gateway = gateway
+        self.time = time.time()
+
+        self.BMS_SOC = 0.0
+        self.BMS_Min_Cell_V = self.BMS_Max_Cell_V = 0.0
+        self.VPV = self.IPV = self.P_PV = 0.0
+        self.VBAT = self.IBAT = self.P_BAT = 0.0
+        self.VOUT = self.IOUT = self.P_OUT = 0.0
+        self.VCOM = self.VOUT_X = 0.0
+        self.FET_T = self.TEMP_PCB = 0.0
+
+    def items(self):
+        self.time = time.strftime("%H:%M:%S", time.localtime())
+        items = [
+            f"{self.index:>2}",
+            f"{self.gateway}",
+            f"{self.mac:<12}",
+            f"{self.BMS_SOC:5.1f}%",
+            f"{self.BMS_Min_Cell_V:5.1f}V",
+            f"{self.BMS_Max_Cell_V:5.1f}V",
+            f"{self.VPV:5.1f}V",
+            f"{self.IPV:6.1f}A",
+            f"{self.P_PV:6.1f}W",
+            f"{self.VBAT:5.1f}V",
+            f"{self.IBAT:6.1f}A",
+            f"{self.P_BAT:6.1f}W",
+            f"{self.VOUT:5.1f}V",
+            f"{self.IOUT:6.1f}A",
+            f"{self.P_OUT:6.1f}W",
+            f"{self.VCOM:5.1f}V",
+            f"{self.VOUT_X:5.1f}V",
+            f"{self.FET_T:5.1f}C",
+            f"{self.TEMP_PCB:5.1f}C",
+            f"{self.time:<8}",
+        ]
+        return items
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -55,7 +97,6 @@ class MainWindow(QMainWindow):
         self.threads: dict[str, UpdateTableThread] = dict()
 
         self._initUI()
-        self._init_menubar()
 
     def _init_brokers(self) -> dict[str, MQTT_Broker]:
         brokers: dict[str:MQTT_Broker] = dict()
@@ -75,41 +116,26 @@ class MainWindow(QMainWindow):
         # Set Title
         self.setWindowTitle("On the Wall")
 
-        # Create a tab widget
-        self.tabMenu = QTabWidget()
-        self.tabMenu.setTabsClosable(True)
-        self.tabMenu.tabCloseRequested.connect(self.close_tab)
+        # Create and configure a tab widget
+        self.tabMenu = QTabWidget(
+            tabsClosable=True, tabCloseRequested=self.close_tab
+        )
         self.setCentralWidget(self.tabMenu)
 
-        # Set Geometry
-        self.setGeometry(100, 100, 1800, 400)
-
-    def _init_menubar(self):
-        # Menubar
-        menubar = self.menuBar()
-
         # File Menu
-        menuAdd = QMenu("Add", self)
-        tab_action = QAction("Gateway", self)
-        tab_action.triggered.connect(self.add_gateway_dialog)
-        menuAdd.addAction(tab_action)
-        fileMenu = menubar.addMenu("File")
-        fileMenu.addMenu(menuAdd)
+        fMenu = self.menuBar().addMenu("File")
+        fMenu.addAction(QAction("Add Gateway", self, triggered=self.add_unit))
 
-        # TODO: Add Commands(class)
         # Command Menu
-        findUnitAction = QAction("Find Unit", self)
-        findUnitAction.triggered.connect(self.find_solarleaf_dialog)
-        plotFastDataAction = QAction("Plot Fast", self)
-        plotFastDataAction.triggered.connect(self.plot_fast)
-        refreshAction = QAction("Current Tab", self)
-        refreshAction.triggered.connect(self.current_tab)
-        fileMenu = menubar.addMenu("Command")
-        fileMenu.addAction(refreshAction)
-        fileMenu.addAction(plotFastDataAction)
-        fileMenu.addAction(findUnitAction)
+        cmdMenu = self.menuBar().addMenu("Command")
+        # cmdMenu.addAction(QAction("Current Tab", self, triggered=self.curr_tab))
+        cmdMenu.addAction(QAction("Plot Fast", self, triggered=self.plot_fast))
+        cmdMenu.addAction(QAction("Find Unit", self, triggered=self.find_unit))
 
-    def add_gateway_dialog(self):
+        # Set Geometry
+        self.setGeometry(100, 100, 1400, 400)
+
+    def add_unit(self):
         self.gw_dialog = QDialog(self)
         self.gw_dialog.setWindowTitle("Gateway")
         self.gw_dialog.setGeometry(100, 200, 300, 100)
@@ -118,36 +144,28 @@ class MainWindow(QMainWindow):
         for gateway, broker in self.brokers.items():
             combo_box.addItem(gateway)
 
-        label = QLabel("Select Gateway")
         button = QPushButton("Select")
         button.clicked.connect(lambda: self.add_tab(self.tabMenu.count()))
 
         layout = QVBoxLayout()
-        layout.addWidget(label)
+        layout.addWidget(QLabel("Select Gateway"))
         layout.addWidget(combo_box)
         layout.addWidget(button)
 
         self.gw_dialog.setLayout(layout)
-
         self.gw_dialog.exec_()
 
-    def find_solarleaf_dialog(self):
+    def find_unit(self):
         self.sl_dialog = QDialog(self)
         self.sl_dialog.setWindowTitle("SolarLeaf")
         self.sl_dialog.setGeometry(100, 200, 300, 100)
 
-        label = QLabel("Enter SolarLeaf")
-        input_line = QLineEdit("aabbccddeeff")
-        button = QPushButton("Select")
-        button.clicked.connect(self.current_row)
-
         layout = QVBoxLayout()
-        layout.addWidget(label)
-        layout.addWidget(input_line)
-        layout.addWidget(button)
+        layout.addWidget(QLabel("Enter SolarLeaf"))
+        layout.addWidget(QLineEdit("aabbccddeeff"))
+        layout.addWidget(QPushButton("Select", clicked=self.current_row))
 
         self.sl_dialog.setLayout(layout)
-
         self.sl_dialog.exec_()
 
     def add_tab(self, index):
@@ -157,8 +175,8 @@ class MainWindow(QMainWindow):
         self.tabs[index] = gateway
 
         table = QTableWidget()
-        self.tabMenu.addTab(table, gateway)
         self.tables[gateway] = table
+        self.tabMenu.addTab(table, gateway)
 
         # Style and Fonts
         table.setColumnCount(len(config["list"]["header"]))
@@ -187,13 +205,11 @@ class MainWindow(QMainWindow):
             return
 
         table = self.tables[gateway]
-        index = int(item[0]) - 1
-        del item[0]
+        index = int(item.pop(0)) - 1
 
         # Implement New Entry
-        row_count = table.rowCount()
-        if index >= row_count:
-            table.setRowCount(row_count + 1)
+        if index >= table.rowCount():
+            table.setRowCount(index + 1)
 
         # Update Entry Based on leaf.index
         for i, value in enumerate(item):
@@ -204,29 +220,27 @@ class MainWindow(QMainWindow):
         # Resize to Contents
         table.resizeRowsToContents()
         table.resizeColumnsToContents()
-        for row in range(table.rowCount()):
-            height = table.rowHeight(row)
-            table.setRowHeight(row, height)
 
     def close_tab(self, index):
         # Get the widget of the closed tab
-        widget_to_remove = self.tabMenu.widget(index)
-        self.tabMenu.removeTab(index)
-        widget_to_remove.deleteLater()
+        if not self.tabs:
+            return
 
         thread = self.threads[self.tabs[index]]
         if thread.isFinished:
             thread.quit()
 
+        self.tabMenu.removeTab(index)
         del self.tabs[index]
 
-    def current_tab(self, tab_index):
+    def curr_tab(self, tab_index):
         current_index = self.tabMenu.currentIndex()
         try:
             print(current_index, self.tabs[tab_index])
         except:
             pass
-        return current_index == tab_index
+        else:
+            return current_index == tab_index
 
     def current_row(self):
         mac = self.sl_dialog.findChild(QLineEdit).text()
@@ -266,12 +280,15 @@ class MainWindow(QMainWindow):
         return items
 
     def plot_fast(self):
+        current_index = self.tabMenu.currentIndex()
+        if current_index == -1:
+            return
+
         data = self.find_selected_unit()
         gateway, mac = (data[0], data[1])
         broker = self.brokers[gateway]
-        broker.publish(
-            f"Yotta/'{mac}'/cmd", payload="fast 1"
-        )  # "fast_period 1")
+        broker.publish(f"Yotta/'{mac}'/cmd", payload="fast 1")
+        # broker.publish(f"Yotta/'{mac}'/cmd", payload="fast_period 1")
 
 
 class UpdateTableThread(QThread):
@@ -322,48 +339,6 @@ class UpdateTableThread(QThread):
                     # print(data)
 
             return leaf.items()
-
-
-class SolarLEAF:
-    def __init__(self, gateway, macaddr, index):
-        self.index = index
-        self.mac = macaddr
-        self.gateway = gateway
-        self.time = time.time()
-
-        self.BMS_SOC = 0.0
-        self.BMS_Min_Cell_V = self.BMS_Max_Cell_V = 0.0
-        self.VPV = self.IPV = self.P_PV = 0.0
-        self.VBAT = self.IBAT = self.P_BAT = 0.0
-        self.VOUT = self.IOUT = self.P_OUT = 0.0
-        self.VCOM = self.VOUT_X = 0.0
-        self.FET_T = self.TEMP_PCB = 0.0
-
-    def items(self):
-        self.time = time.strftime("%H:%M:%S", time.localtime())
-        items = [
-            f"{self.index:>2}",
-            f"{self.gateway}",
-            f"{self.mac:<12}",
-            f"{self.BMS_SOC:5.1f}%",
-            f"{self.BMS_Min_Cell_V:5.1f}V",
-            f"{self.BMS_Max_Cell_V:5.1f}V",
-            f"{self.VPV:5.1f}V",
-            f"{self.IPV:6.1f}A",
-            f"{self.P_PV:6.1f}W",
-            f"{self.VBAT:5.1f}V",
-            f"{self.IBAT:6.1f}A",
-            f"{self.P_BAT:6.1f}W",
-            f"{self.VOUT:5.1f}V",
-            f"{self.IOUT:6.1f}A",
-            f"{self.P_OUT:6.1f}W",
-            f"{self.VCOM:5.1f}V",
-            f"{self.VOUT_X:5.1f}V",
-            f"{self.FET_T:5.1f}C",
-            f"{self.TEMP_PCB:5.1f}C",
-            f"{self.time:<8}",
-        ]
-        return items
 
 
 if __name__ == "__main__":

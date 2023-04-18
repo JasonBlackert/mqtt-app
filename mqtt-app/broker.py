@@ -31,7 +31,7 @@ class MQTT_Broker:
         client.subscribe("Yotta/#")
 
     def on_disconnect(self, client, userdata, rc):
-        log.info(f'Broker: {self.host} disconnected with result code {str(rc)}')
+        log.info(f"Broker: {self.host} disconnected with result code {str(rc)}")
 
     def on_message(self, client, userdata, msg):
         if re.match("Yotta/............/", msg.topic) is not None:
@@ -45,5 +45,5 @@ class MQTT_Broker:
         self.client.disconnect(name)
         self.client.loop_stop()
 
-    def publish(self, cmd: str = "getid"):
-        self.client.publish("Yotta/cmd", cmd)
+    def publish(self, topic: str = "Yotta/cmd", cmd: str = "getid"):
+        self.client.publish(topic, cmd)
