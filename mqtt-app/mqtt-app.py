@@ -11,7 +11,7 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
 from PyQt5.QtCore import pyqtSignal, QThread, QTimer
-from PyQt5.QtGui import QFont
+from PyQt5.QtGui import QFont, QIcon
 
 from PyQt5.QtWidgets import (
     QApplication,
@@ -28,7 +28,7 @@ from PyQt5.QtWidgets import (
     QTableWidgetItem,
     QAction,
     QVBoxLayout,
-    QHBoxLayout,
+    QGridLayout,
 )
 
 from broker import MQTT_Broker
@@ -59,6 +59,15 @@ class Commands:
         # broker.publish(f"Yotta/'{mac}'/cmd", payload="fast 0")
         broker.publish(f"Yotta/{mac}/cmd", payload="set fast_period 0")
         pass
+
+    def change_ssid(self, broker, mac, ssid):
+        payload = f"inv ssid {ssid}"
+        broker.publish(f"Yotta/{mac}/cmd", payload=payload)
+        time.sleep(3)
+        self.commit_ssid(broker, mac)
+
+    def commit_ssid(self, broker, mac):
+        broker.publish(f"Yotta/{mac}/cmd", payload=f"inv commit")
 
 
 class SolarLEAF:
@@ -144,9 +153,10 @@ class MainWindow(QMainWindow):
         fMenu.addAction(QAction("Add Gateway", self, triggered=self.add_popup))
 
         # Command Menu
-        cmdMenu = self.menuBar().addMenu("Command")
-        cmdMenu.addAction(QAction("Find Unit", self, triggered=self.find_popup))
-        cmdMenu.addAction(QAction("Plot Fast", self, triggered=self.plot_fast))
+        cMenu = self.menuBar().addMenu("Command")
+        cMenu.addAction(QAction("Find Unit", self, triggered=self.find_popup))
+        cMenu.addAction(QAction("Plot Fast", self, triggered=self.plot_fast))
+        cMenu.addAction(QAction("Change SSID", self, triggered=self.ssid_popup))
 
         # Set Geometry
         self.setGeometry(100, 100, 1400, 400)
@@ -234,8 +244,8 @@ class MainWindow(QMainWindow):
         if thread.isFinished:
             thread.quit()
 
-        new_tabs: dict = dict()
         del self.tabs[index]
+        new_tabs: dict = dict()
         for key, value in self.tabs.items():
             new_tabs[key - 1] = value
         self.tabs = new_tabs
@@ -246,6 +256,7 @@ class MainWindow(QMainWindow):
         self.sl_dialog = QDialog(self)
         self.sl_dialog.setWindowTitle("SolarLeaf")
         self.sl_dialog.setGeometry(100, 200, 300, 100)
+        self.sl_dialog.setWindowIcon(QIcon("share/chicken.png"))
 
         layout = QVBoxLayout()
         layout.addWidget(QLabel("Enter SolarLeaf"))
@@ -324,6 +335,73 @@ class MainWindow(QMainWindow):
 
         self.cmds.disable_fast(broker, mac)
 
+    def ssid_popup(self):
+        data = self.selected_unit()
+        if not data:
+            return
+
+        self.ssid_dialog = QDialog(self)
+        self.ssid_dialog.setWindowTitle("SolarLeaf")
+        self.ssid_dialog.setGeometry(100, 200, 300, 100)
+
+        layout = QVBoxLayout()
+        layout.addWidget(QLabel("Enter New SSID"))
+        layout.addWidget(QLineEdit(""))
+        layout.addWidget(QPushButton("Select", clicked=self.change_ssid))
+
+        self.ssid_dialog.setLayout(layout)
+        self.ssid_dialog.exec_()
+
+    def warning_pop(self):
+        self.warning_dialog = QDialog(self)
+        self.warning_dialog.setWindowTitle("SolarLeaf")
+        self.warning_dialog.setGeometry(100, 200, 300, 100)
+
+        layout = QGridLayout()
+        commit = QPushButton("Commit", clicked=lambda: self.warning("Commit"))
+        cancel = QPushButton("Cancel", clicked=lambda: self.warning("Cancel"))
+        layout.addWidget(QLabel("Are you sure?"), 0, 0, 0, 1)
+        layout.addWidget(commit, 1, 1)
+        layout.addWidget(cancel, 2, 1)
+        self.warning_dialog.setLayout(layout)
+        self.warning_dialog.exec_()
+
+        return self.decision
+
+    def change_ssid(self):
+        ssid = self.ssid_dialog.findChild(QLineEdit).text()
+        if ssid == "":
+            print("Enter a valid SSID")
+            return
+
+        self.warning_pop()
+
+        if not self.decision:
+            print("Operation aborted")
+            return
+
+        data = self.selected_unit()
+        if not data:
+            return
+
+        self.ssid_dialog.accept()
+
+        gateway, mac = (data[0], data[1])
+        broker = self.brokers[gateway]
+
+        print(f"Changing SSID of {mac} to '{ssid}'")
+
+        self.cmds.change_ssid(broker, mac, ssid)
+
+    def warning(self, decision="Cancel"):
+        self.warning_dialog.accept()
+
+        print(decision, decision == "Commit")
+        if decision == "Commit":
+            self.decision = True
+        elif decision == "Cancel":
+            self.decision = False
+
 
 class UpdateTableThread(QThread):
     slow_signal = pyqtSignal(str, list)
@@ -342,22 +420,22 @@ class UpdateTableThread(QThread):
     def run(self):
         self.broker.publish(payload="getid")
         while True:
-            data = self.broker.get()
+            while not self.broker.queue.empty():
+                data = self.broker.get()
 
-            try:
-                items = self.process(self.gateway, data)
-            except Exception as err:
-                print(f"UpdateTable Error: {err}")
-            else:
-                self.slow_signal.emit(self.gateway, items)
-                self.plot_signal.emit(self.gateway, items)
+                try:
+                    items = self.process(self.gateway, data)
+                except Exception as err:
+                    print(f"UpdateTable Error: {err}")
+                else:
+                    self.slow_signal.emit(self.gateway, items)
+                    self.plot_signal.emit(self.gateway, items)
 
-            if self.gateway not in self.tabs.values():
-                return
+                if self.gateway not in self.tabs.values():
+                    print(f"Thread terminated for {self.gateway}")
+                    return
 
-            time.sleep(0.1)
-
-        print(f"Thread terminated for {self.gateway}")
+                time.sleep(0.1)
 
     def set_value(self, leaf, data, name: str):
         if name in data.keys():
