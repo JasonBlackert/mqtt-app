@@ -46,8 +46,8 @@ class MQTT_Broker:
         self.client.disconnect(name)
         self.client.loop_stop()
 
-    def publish(self, topic: str = "Yotta/cmd", cmd: str = "getid"):
-        self.client.publish(topic, cmd)
+    def publish(self, topic: str = "Yotta/cmd", payload: str = "getid"):
+        self.client.publish(topic, payload)
 
     def get(self):
         if self.available:

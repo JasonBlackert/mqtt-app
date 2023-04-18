@@ -10,8 +10,8 @@ from typing import Dict
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
-from PyQt5.QtCore import pyqtSignal, QThread
-from PyQt5.QtGui import QFont, QFontMetrics
+from PyQt5.QtCore import pyqtSignal, QThread, QTimer
+from PyQt5.QtGui import QFont
 
 from PyQt5.QtWidgets import (
     QApplication,
@@ -19,9 +19,9 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QTabWidget,
     QComboBox,
+    QCheckBox,
     QLineEdit,
     QDialog,
-    QWidget,
     QLabel,
     QMenu,
     QTableWidget,
@@ -52,12 +52,12 @@ FONT.setPointSize(FONT_SIZE)
 class Commands:
     def enable_fast(self, broker, mac):
         # broker.publish(f"Yotta/'{mac}'/cmd", payload="fast 1")
-        # broker.publish(f"Yotta/'{mac}'/cmd", payload="fast_period 1")
+        broker.publish(f"Yotta/{mac}/cmd", payload="set fast_period 1")
         pass
 
     def disable_fast(self, broker, mac):
         # broker.publish(f"Yotta/'{mac}'/cmd", payload="fast 0")
-        # broker.publish(f"Yotta/'{mac}'/cmd", payload="fast_period 0")
+        broker.publish(f"Yotta/{mac}/cmd", payload="set fast_period 0")
         pass
 
 
@@ -195,7 +195,7 @@ class MainWindow(QMainWindow):
         # Initialize Specific Broker
         broker = self.brokers[gateway]
         thread = UpdateTableThread(broker, gateway, self.tabs)
-        thread.signal.connect(self.add_item_to_table)
+        thread.slow_signal.connect(self.add_item_to_table)
         thread.start()
         self.threads[gateway] = thread
 
@@ -322,21 +322,17 @@ class MainWindow(QMainWindow):
 
         self.cmds.enable_fast(broker, mac)
 
-        # Example data
-        data = [1, 2, 3, 4, 5]
-
-        # Set up the Qt application and dialog
-        dialog = LineGraphDialog(data)
-
-        # Show the dialog and run the application
+        data_thread = self.threads[gateway]
+        dialog = LineGraphDialog(data_thread)
         dialog.exec_()
-        # sys.exit(app.exec_())
+        time.sleep(1)
 
         self.cmds.disable_fast(broker, mac)
 
 
 class UpdateTableThread(QThread):
-    signal = pyqtSignal(str, list)
+    slow_signal = pyqtSignal(str, list)
+    plot_signal = pyqtSignal(str, list)
     stop = pyqtSignal()
 
     def __init__(self, broker, gateway, tabs):
@@ -349,10 +345,17 @@ class UpdateTableThread(QThread):
         self.Leaves: dict[str, SolarLEAF] = dict()
 
     def run(self):
-        self.broker.publish(cmd="getid")  # For Testing Remove Upon Completion
+        self.broker.publish(payload="getid")
         while True:
             data = self.broker.get()
-            self.signal.emit(self.gateway, self.process(self.gateway, data))
+
+            try:
+                items = self.process(self.gateway, data)
+            except Exception as err:
+                print(f"UpdateTable Error: {err}")
+            else:
+                self.slow_signal.emit(self.gateway, items)
+                self.plot_signal.emit(self.gateway, items)
 
             if self.gateway not in self.tabs.values():
                 return
@@ -382,28 +385,92 @@ class UpdateTableThread(QThread):
                     # print(data)
 
             return leaf.items()
+            # return leaf.items()
 
 
 class LineGraphDialog(QDialog):
-    def __init__(self, data, parent=None):
+    def __init__(self, thread, parent=None):
         super(LineGraphDialog, self).__init__(parent)
 
+        thread.plot_signal.connect(self.update_plot)
+
+        self.data = [[], [], [], [], [], [], [], [], [], []]
+
+        self.labels = [
+            "self.VPV",
+            "self.IPV",
+            "self.P_PV",
+            "self.VBAT",
+            "self.IBAT",
+            "self.P_BAT",
+            "self.VOUT",
+            "self.IOUT",
+            "self.P_OUT",
+            "self.VCOM",
+        ]
+
         # Set up the Matplotlib figure and canvas
-        self.figure = Figure(figsize=(5, 5), dpi=100)
+        self.figure = Figure(figsize=(1, 1), dpi=100)
         self.canvas = FigureCanvas(self.figure)
         self.axes = self.figure.add_subplot(111)
 
-        # Plot the data as a line graph
-        x = np.arange(len(data))
-        self.axes.plot(x, data)
+        # Create Axes
+        self.lines: dict = dict()
+        for i, name in enumerate(self.labels):
+            self.lines[i] = self.create_axes(label=name)
+
+        # Add legend
+        self.axes.legend()
 
         # Set up the layout
-        layout = QVBoxLayout()
-        layout.addWidget(self.canvas)
-        self.setLayout(layout)
+        self.layout = QVBoxLayout()
+        self.layout.addWidget(self.canvas)
 
-        # Set the dialog size
+        # Create Checkboxes
+        self.checkboxes: dict = dict()
+        for i, name in enumerate(self.labels):
+            self.checkboxes[i] = self.create_checkbox(label=name)
+
+        self.setLayout(self.layout)
         self.resize(500, 500)
+
+    def create_axes(self, label=""):
+        return self.axes.plot([], [], label=label)
+
+    def create_checkbox(self, label=""):
+        checkbox = QCheckBox(label)
+        checkbox.setChecked(False)
+        checkbox.stateChanged.connect(self.visibility)
+        self.layout.addWidget(checkbox)
+        return checkbox
+
+    def convert_to_float(self, value):
+        return float(value.strip(" ").strip("W").strip("V").strip("A"))
+
+    def update_plot(self, gateway, new_data):
+        # Append New Data
+        for i, data in enumerate(new_data[6:16]):
+            self.data[i].append(self.convert_to_float(data))
+
+        # Set New Data
+        length = np.arange(len(self.data[0]))
+        for i, line in self.lines.items():
+            if self.checkboxes[i]:
+                line[0].set_data(length, self.data[i])
+            else:
+                line.set_data([], [])
+
+        # Update
+        self.axes.relim()
+        self.axes.autoscale_view()
+        self.canvas.draw()
+
+    def visibility(self):
+        # Change Visibility on Plot
+        for i, line in self.lines.items():
+            line[0].set_visible(self.checkboxes[i].isChecked())
+
+        self.canvas.draw()
 
 
 if __name__ == "__main__":
