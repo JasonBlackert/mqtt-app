@@ -51,18 +51,13 @@ FONT.setPointSize(FONT_SIZE)
 
 class Commands:
     def enable_fast(self, broker, mac):
-        # broker.publish(f"Yotta/'{mac}'/cmd", payload="fast 1")
         broker.publish(f"Yotta/{mac}/cmd", payload="set fast_period 1")
-        pass
 
     def disable_fast(self, broker, mac):
-        # broker.publish(f"Yotta/'{mac}'/cmd", payload="fast 0")
         broker.publish(f"Yotta/{mac}/cmd", payload="set fast_period 0")
-        pass
 
     def change_ssid(self, broker, mac, ssid):
-        payload = f"inv ssid {ssid}"
-        broker.publish(f"Yotta/{mac}/cmd", payload=payload)
+        broker.publish(f"Yotta/{mac}/cmd", payload=f"inv ssid {ssid}")
         time.sleep(3)
         self.commit_ssid(broker, mac)
 
@@ -140,7 +135,8 @@ class MainWindow(QMainWindow):
 
     def _initUI(self):
         # Set Title
-        self.setWindowTitle("On the Wall")
+        self.setWindowTitle("Yotta Asset Manager")
+        self.setWindowIcon(QIcon("share/shield.png"))
 
         # Create and configure a tab widget
         self.tabMenu = QTabWidget(
@@ -159,12 +155,14 @@ class MainWindow(QMainWindow):
         cMenu.addAction(QAction("Change SSID", self, triggered=self.ssid_popup))
 
         # Set Geometry
-        self.setGeometry(100, 100, 1400, 400)
+        self.popup_geometry = (100, 200, 200, 100)
+        self.window_geometry = (100, 100, 1200, 400)
+        self.setGeometry(*self.window_geometry)
 
     def add_popup(self):
         self.gw_dialog = QDialog(self)
         self.gw_dialog.setWindowTitle("Gateway")
-        self.gw_dialog.setGeometry(100, 200, 300, 100)
+        self.gw_dialog.setGeometry(*self.popup_geometry)
 
         button = QPushButton("Select")
         button.clicked.connect(lambda: self.add_tab(self.tabMenu.count()))
@@ -246,16 +244,18 @@ class MainWindow(QMainWindow):
 
         del self.tabs[index]
         new_tabs: dict = dict()
-        for key, value in self.tabs.items():
-            new_tabs[key - 1] = value
-        self.tabs = new_tabs
 
+        for key, value in self.tabs.items():
+            if key > 0:
+                new_tabs[key - 1] = value
+
+        self.tabs = new_tabs
         self.tabMenu.removeTab(index)
 
     def find_popup(self):
         self.sl_dialog = QDialog(self)
         self.sl_dialog.setWindowTitle("SolarLeaf")
-        self.sl_dialog.setGeometry(100, 200, 300, 100)
+        self.sl_dialog.setGeometry(*self.popup_geometry)
         self.sl_dialog.setWindowIcon(QIcon("share/chicken.png"))
 
         layout = QVBoxLayout()
@@ -342,7 +342,7 @@ class MainWindow(QMainWindow):
 
         self.ssid_dialog = QDialog(self)
         self.ssid_dialog.setWindowTitle("SolarLeaf")
-        self.ssid_dialog.setGeometry(100, 200, 300, 100)
+        self.ssid_dialog.setGeometry(*self.popup_geometry)
 
         layout = QVBoxLayout()
         layout.addWidget(QLabel("Enter New SSID"))
@@ -355,7 +355,7 @@ class MainWindow(QMainWindow):
     def warning_pop(self):
         self.warning_dialog = QDialog(self)
         self.warning_dialog.setWindowTitle("SolarLeaf")
-        self.warning_dialog.setGeometry(100, 200, 300, 100)
+        self.warning_dialog.setGeometry(*self.popup_geometry)
 
         layout = QGridLayout()
         commit = QPushButton("Commit", clicked=lambda: self.warning("Commit"))
@@ -458,7 +458,6 @@ class UpdateTableThread(QThread):
                     # print(data)
 
             return leaf.items()
-            # return leaf.items()
 
 
 class LineGraphDialog(QDialog):
