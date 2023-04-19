@@ -1,5 +1,6 @@
 import re
 import logging
+import socket
 import paho.mqtt.client as mqtt
 
 from queue import Queue
@@ -16,7 +17,6 @@ logging.basicConfig(level=lvl, format="%(name)s [%(levelname)s]: %(message)s")
 
 class MQTT_Broker:
     def __init__(self, host):
-        # super.__init__()
         self.host = host
         self.client = mqtt.Client()
 
@@ -39,6 +39,8 @@ class MQTT_Broker:
             self.queue.put(msg)
 
     def start(self):
+        sock = socket.create_connection((self.host, 1883), timeout=2)
+        self.client.socket = sock
         self.client.connect(self.host)
         self.client.loop_start()
 
