@@ -1,6 +1,7 @@
 import re
 import sys
 import time
+from datetime import datetime
 import json
 import logging
 import numpy as np
@@ -11,7 +12,7 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
 from PyQt5.QtCore import pyqtSignal, QThread, QTimer
-from PyQt5.QtGui import QFont, QIcon
+from PyQt5.QtGui import QFont, QIcon, QColor, QBrush
 
 from PyQt5.QtWidgets import (
     QApplication,
@@ -80,6 +81,8 @@ class SolarLEAF:
         self.VCOM = self.VOUT_X = 0.0
         self.FET_T = self.TEMP_PCB = 0.0
 
+        self.last = time.time()
+
     def items(self):
         self.time = time.strftime("%H:%M:%S", time.localtime())
         items = [
@@ -114,6 +117,7 @@ class MainWindow(QMainWindow):
         self.cmds = Commands()
         self.brokers = self._init_brokers()
         self.tabs: dict[int, str] = dict()
+        self.timers: dict[str, QTimer] = dict()
         self.tables: dict[int, QTableWidget] = dict()
         self.threads: dict[str, UpdateTableThread] = dict()
 
@@ -142,6 +146,7 @@ class MainWindow(QMainWindow):
         self.tabMenu = QTabWidget(
             tabsClosable=True, tabCloseRequested=self.close_tab
         )
+
         self.setCentralWidget(self.tabMenu)
 
         # File Menu
@@ -156,7 +161,7 @@ class MainWindow(QMainWindow):
 
         # Set Geometry
         self.popup_geometry = (100, 200, 200, 100)
-        self.window_geometry = (100, 100, 1200, 400)
+        self.window_geometry = (100, 100, 1255, 500)
         self.setGeometry(*self.window_geometry)
 
     def add_popup(self):
@@ -211,13 +216,21 @@ class MainWindow(QMainWindow):
         # Set New Tab as Current Tab
         self.tabMenu.setCurrentIndex(self.tabMenu.count() - 1)
 
-    def add_item_to_table(self, gateway, item):
+        # QTimer to update table to red after 60 secs
+        # Set up the timer to update the plot in real time
+        timer = QTimer()
+        timer.timeout.connect(lambda: self.timeout_color(gateway))
+        timer.start(1000)  # Update every second
+        self.timers[gateway] = timer
+
+    def add_item_to_table(self, gateway, leaf):
         # Add a new item to the table widget
+        item = leaf.items()
         if gateway not in self.tabs.values():
             return
 
         table = self.tables[gateway]
-        index = int(item.pop(0)) - 1
+        index = int(item.pop(0)) - 1  # Remove index from items
 
         # Implement New Entry
         if index >= table.rowCount():
@@ -225,13 +238,38 @@ class MainWindow(QMainWindow):
 
         # Update Entry Based on leaf.index
         for i, value in enumerate(item):
+            # TODO: Update Entry to Black
             currEntry = QTableWidgetItem(str(value))
             currEntry.setFont(FONT)
-            table.setItem(index, i, currEntry)  # i-1 to not display index
+            table.setItem(index, i, currEntry)
 
         # Resize to Contents
         table.resizeRowsToContents()
         table.resizeColumnsToContents()
+        # self.adjustSize()
+
+    def timeout_color(self, gateway):
+        table = self.tables[gateway]
+
+        for i in range(table.rowCount()):
+            mac = table.item(i, 1).text()
+
+            time_str = table.item(i, 18).text()
+            date_obj = datetime.combine(
+                datetime.today(),
+                datetime.strptime(time_str, "%H:%M:%S").time(),
+            )
+            last_time = int(date_obj.timestamp())
+
+            diff_time = time.time() - last_time
+            if diff_time > TIMEOUT:
+                print(f"Timeout on mac {mac}")
+                for j in range(table.columnCount()):
+                    table.item(i, j).setForeground(QBrush(QColor(255, 0, 0)))
+            else:
+                # print(f"No Timeout on {mac} index: {i}")
+                for j in range(table.columnCount()):
+                    table.item(i, j).setForeground(QBrush(QColor(0, 0, 0)))
 
     def close_tab(self, index):
         # Get the widget of the closed tab
@@ -242,19 +280,26 @@ class MainWindow(QMainWindow):
         if thread.isFinished:
             thread.quit()
 
+        gateway = self.tabs[index]
+        timer = self.timers[gateway]
+        timer.stop()
+
+        del self.timers[gateway]
         del self.tabs[index]
         new_tabs: dict = dict()
 
         for key, value in self.tabs.items():
             if key > 0:
                 new_tabs[key - 1] = value
+            else:
+                new_tabs[key] = value
 
         self.tabs = new_tabs
         self.tabMenu.removeTab(index)
 
     def find_popup(self):
         self.sl_dialog = QDialog(self)
-        self.sl_dialog.setWindowTitle("SolarLeaf")
+        self.sl_dialog.setWindowTitle("Find Unit")
         self.sl_dialog.setGeometry(*self.popup_geometry)
         self.sl_dialog.setWindowIcon(QIcon("share/chicken.png"))
 
@@ -327,6 +372,7 @@ class MainWindow(QMainWindow):
         broker = self.brokers[gateway]
 
         self.cmds.enable_fast(broker, mac)
+        print(f"Enabled fast data on {mac}")
 
         data_thread = self.threads[gateway]
         dialog = LineGraphDialog(data_thread)
@@ -334,6 +380,7 @@ class MainWindow(QMainWindow):
         time.sleep(1)
 
         self.cmds.disable_fast(broker, mac)
+        print(f"Disabled fast data on {mac}")
 
     def ssid_popup(self):
         data = self.selected_unit()
@@ -341,7 +388,7 @@ class MainWindow(QMainWindow):
             return
 
         self.ssid_dialog = QDialog(self)
-        self.ssid_dialog.setWindowTitle("SolarLeaf")
+        self.ssid_dialog.setWindowTitle("Change SSID")
         self.ssid_dialog.setGeometry(*self.popup_geometry)
 
         layout = QVBoxLayout()
@@ -404,8 +451,8 @@ class MainWindow(QMainWindow):
 
 
 class UpdateTableThread(QThread):
-    slow_signal = pyqtSignal(str, list)
-    plot_signal = pyqtSignal(str, list)
+    slow_signal = pyqtSignal(str, SolarLEAF)
+    plot_signal = pyqtSignal(str, SolarLEAF)
     stop = pyqtSignal()
 
     def __init__(self, broker, gateway, tabs):
@@ -448,6 +495,7 @@ class UpdateTableThread(QThread):
             # Associate SolarLeaf with Gateway
             index = len(self.Leaves) + 1
             leaf = self.Leaves.setdefault(mac, SolarLEAF(gateway, mac, index))
+            leaf.last = time.time()
 
             if topic == "json":
                 if "type" in (data := json.loads(msg.payload)):
@@ -457,12 +505,15 @@ class UpdateTableThread(QThread):
                     ]
                     # print(data)
 
-            return leaf.items()
+            return leaf
 
 
 class LineGraphDialog(QDialog):
     def __init__(self, thread, parent=None):
         super(LineGraphDialog, self).__init__(parent)
+
+        self.setWindowTitle("Fast Data")
+        self.setWindowIcon(QIcon("share/shield.png"))
 
         thread.plot_signal.connect(self.update_plot)
 
@@ -519,8 +570,9 @@ class LineGraphDialog(QDialog):
     def convert_to_float(self, value):
         return float(value.strip(" ").strip("W").strip("V").strip("A"))
 
-    def update_plot(self, gateway, new_data):
+    def update_plot(self, gateway, leaf):
         # Append New Data
+        new_data = leaf.items()
         for i, data in enumerate(new_data[6:16]):
             self.data[i].append(self.convert_to_float(data))
 
