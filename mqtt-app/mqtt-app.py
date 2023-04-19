@@ -6,12 +6,10 @@ import json
 import logging
 import numpy as np
 
-from typing import Dict
-
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
-from PyQt5.QtCore import pyqtSignal, QThread, QTimer
+from PyQt5.QtCore import pyqtSignal, QThread, QTimer, Qt
 from PyQt5.QtGui import QFont, QIcon, QColor, QBrush
 
 from PyQt5.QtWidgets import (
@@ -24,7 +22,6 @@ from PyQt5.QtWidgets import (
     QLineEdit,
     QDialog,
     QLabel,
-    QMenu,
     QTableWidget,
     QTableWidgetItem,
     QAction,
@@ -64,6 +61,15 @@ class Commands:
 
     def commit_ssid(self, broker, mac):
         broker.publish(f"Yotta/{mac}/cmd", payload=f"inv commit")
+
+    def getid(self, broker):
+        broker.publish(f"Yotta/cmd", payload="getid")
+
+    def version(self, broker):
+        broker.publish(f"Yotta/cmd", payload="version")
+
+    def fw_crc(self, broker):
+        broker.publish(f"Yotta/cmd", payload="get FW_CRC")
 
 
 class SolarLEAF:
@@ -143,9 +149,7 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(QIcon("share/shield.png"))
 
         # Create and configure a tab widget
-        self.tabMenu = QTabWidget(
-            tabsClosable=True, tabCloseRequested=self.close_tab
-        )
+        self.tabMenu = QTabWidget(tabsClosable=True, tabCloseRequested=self.close_tab)
 
         self.setCentralWidget(self.tabMenu)
 
@@ -159,10 +163,34 @@ class MainWindow(QMainWindow):
         cMenu.addAction(QAction("Plot Fast", self, triggered=self.plot_fast))
         cMenu.addAction(QAction("Change SSID", self, triggered=self.ssid_popup))
 
+        pMenu = self.menuBar().addMenu("Print")
+        # printToggle = QCheckBox("Toggle Print", self)
+        # self.printToggle.stateChanged.connect(self.toggle_print)
+
+        # pMenu.addAction(printToggle)
+
+        pMenu.addAction(
+            QAction("Get ID (MAC)", self, triggered=lambda: self.curr_tab("getid"))
+        )
+        pMenu.addAction(
+            QAction("ESP32 Version", self, triggered=lambda: self.curr_tab("version"))
+        )
+        pMenu.addAction(
+            QAction("S32 Version", self, triggered=lambda: self.curr_tab("fw_crc"))
+        )
+
         # Set Geometry
         self.popup_geometry = (100, 200, 200, 100)
         self.window_geometry = (100, 100, 1255, 500)
         self.setGeometry(*self.window_geometry)
+
+        # Start Timer to Update Window Every Second
+        # timer = QTimer()
+        # timer.timeout.connect(self.update_window)
+        # timer.start(1000)  # Update every second
+
+    def update_window(self):
+        pass
 
     def add_popup(self):
         self.gw_dialog = QDialog(self)
@@ -208,7 +236,7 @@ class MainWindow(QMainWindow):
 
         # Initialize Specific Broker
         broker = self.brokers[gateway]
-        thread = UpdateTableThread(broker, gateway, self.tabs)
+        thread = UpdateTableThread(self, broker, gateway, self.tabs)
         thread.slow_signal.connect(self.add_item_to_table)
         thread.start()
         self.threads[gateway] = thread
@@ -263,7 +291,7 @@ class MainWindow(QMainWindow):
 
             diff_time = time.time() - last_time
             if diff_time > TIMEOUT:
-                print(f"Timeout on mac {mac}")
+                # print(f"Timeout on mac {mac}")
                 for j in range(table.columnCount()):
                     table.item(i, j).setForeground(QBrush(QColor(255, 0, 0)))
             else:
@@ -449,15 +477,39 @@ class MainWindow(QMainWindow):
         elif decision == "Cancel":
             self.decision = False
 
+    def curr_tab(self, text):
+        current_index = self.tabMenu.currentIndex()
+        try:
+            gateway = self.tabs[current_index]
+            broker = self.brokers[gateway]
+        except:
+            pass
+        else:
+            if text == "print":
+                self.print = not self.print
+            if text == "getid":
+                self.cmds.getid(broker)
+            if text == "version":
+                self.cmds.version(broker)
+            if text == "fw_crc":
+                self.cmds.fw_crc(broker)
+
+    def toggle_print(self, state):
+        if state == Qt.Checked:
+            self.boolVal = True
+        else:
+            self.boolVal = False
+
 
 class UpdateTableThread(QThread):
     slow_signal = pyqtSignal(str, SolarLEAF)
     plot_signal = pyqtSignal(str, SolarLEAF)
-    stop = pyqtSignal()
+    # stop = pyqtSignal()
 
-    def __init__(self, broker, gateway, tabs):
+    def __init__(self, window, broker, gateway, tabs):
         super().__init__()
 
+        self.window = window
         self.broker = broker
         self.gateway = gateway
         self.tabs = tabs
@@ -471,12 +523,13 @@ class UpdateTableThread(QThread):
                 data = self.broker.get()
 
                 try:
-                    items = self.process(self.gateway, data)
+                    speed, items = self.process(self.gateway, data)
                 except Exception as err:
                     print(f"UpdateTable Error: {err}")
                 else:
+                    if speed == "fast":
+                        self.plot_signal.emit(self.gateway, items)
                     self.slow_signal.emit(self.gateway, items)
-                    self.plot_signal.emit(self.gateway, items)
 
                 if self.gateway not in self.tabs.values():
                     print(f"Thread terminated for {self.gateway}")
@@ -497,15 +550,21 @@ class UpdateTableThread(QThread):
             leaf = self.Leaves.setdefault(mac, SolarLEAF(gateway, mac, index))
             leaf.last = time.time()
 
+            speed = ""
+            payload = json.loads(msg.payload)
+            if "type" in payload:
+                speed = payload["type"]
+
             if topic == "json":
                 if "type" in (data := json.loads(msg.payload)):
-                    [
-                        self.set_value(leaf, data, name)
-                        for name in config["list"]["names"]
-                    ]
-                    # print(data)
+                    [self.set_value(leaf, data, name) for name in config["list"]["names"]]
 
-            return leaf
+                    # self.window.print:
+                    # print(data)
+            else:
+                print(payload)
+
+            return speed, leaf
 
 
 class LineGraphDialog(QDialog):
