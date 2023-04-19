@@ -39,7 +39,7 @@ class MQTT_Broker:
             self.queue.put(msg)
 
     def start(self):
-        sock = socket.create_connection((self.host, 1883), timeout=2)
+        sock = socket.create_connection((self.host, 1883), timeout=3)
         self.client.socket = sock
         self.client.connect(self.host)
         self.client.loop_start()
