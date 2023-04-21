@@ -96,8 +96,8 @@ class SolarLEAF:
             f"{self.gateway}",
             f"{self.mac:<12}",
             f"{self.BMS_SOC:5.1f}%",
-            f"{self.BMS_Min_Cell_V:5.1f}V",
-            f"{self.BMS_Max_Cell_V:5.1f}V",
+            f"{self.BMS_Min_Cell_V:5.2f}V",
+            f"{self.BMS_Max_Cell_V:5.2f}V",
             f"{self.VPV:5.1f}V",
             f"{self.IPV:6.1f}A",
             f"{self.P_PV:6.1f}W",
@@ -403,7 +403,7 @@ class MainWindow(QMainWindow):
         print(f"Enabled fast data on {mac}")
 
         data_thread = self.threads[gateway]
-        dialog = LineGraphDialog(data_thread)
+        dialog = LineGraphDialog(data_thread, mac)
         dialog.exec_()
         time.sleep(1)
 
@@ -568,10 +568,10 @@ class UpdateTableThread(QThread):
 
 
 class LineGraphDialog(QDialog):
-    def __init__(self, thread, parent=None):
+    def __init__(self, thread, mac, parent=None):
         super(LineGraphDialog, self).__init__(parent)
 
-        self.setWindowTitle("Fast Data")
+        self.setWindowTitle(f"Fast Data: {mac}")
         self.setWindowIcon(QIcon("share/shield.png"))
 
         thread.plot_signal.connect(self.update_plot)
