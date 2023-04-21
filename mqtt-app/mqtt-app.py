@@ -71,6 +71,23 @@ class Commands:
     def fw_crc(self, broker):
         broker.publish(f"Yotta/cmd", payload="get FW_CRC")
 
+    def sl_status(self, broker):
+        broker.publish(f"Yotta/cmd", payload="get sl_status")
+
+    def ota_BMS(self, broker, mac, binary=""):
+        if binary != "":
+            broker.publish(f"Yotta/{mac}/cmd", payload="")
+
+    def ota_S32K(self, broker, mac, binary=""):
+        if binary != "":
+            broker.publish(f"Yotta/{mac}/cmd", payload=f"pcimage {binary}")
+            time.sleep(3)
+            broker.publish(f"Yotta/{mac}cmd", payload=f"pcupdate")
+
+    def ota_ESP32(self, broker, mac, binary=""):
+        if binary != "":
+            broker.publish(f"Yotta/{mac}/cmd", payload=f"ota {binary}")
+
 
 class SolarLEAF:
     def __init__(self, gateway, macaddr, index):
@@ -164,14 +181,19 @@ class MainWindow(QMainWindow):
         cMenu.addAction(QAction("Change SSID", self, triggered=self.ssid_popup))
 
         pMenu = self.menuBar().addMenu("Print")
-        # printToggle = QCheckBox("Toggle Print", self)
-        # self.printToggle.stateChanged.connect(self.toggle_print)
-
-        # pMenu.addAction(printToggle)
+        checkboxAction = QAction("Toggle Printing", self)
+        checkboxAction.triggered.connect(self.toggle_print)
+        checkboxAction.setCheckable(True)
+        pMenu.addAction(checkboxAction)
+        self.print = False
 
         pMenu.addAction(
             QAction("Get ID (MAC)", self, triggered=lambda: self.curr_tab("getid"))
         )
+        pMenu.addAction(
+            QAction("Get SL Status", self, triggered=lambda: self.curr_tab("sl_status"))
+        )
+
         pMenu.addAction(
             QAction("ESP32 Version", self, triggered=lambda: self.curr_tab("version"))
         )
@@ -179,8 +201,11 @@ class MainWindow(QMainWindow):
             QAction("S32 Version", self, triggered=lambda: self.curr_tab("fw_crc"))
         )
 
+        uMenu = self.menuBar().addMenu("Update")
+        uMenu.addAction(QAction("Update", self, triggered=self.update_popup))
+
         # Set Geometry
-        self.popup_geometry = (100, 200, 200, 100)
+        self.popup_geometry = (100, 200, 300, 100)
         self.window_geometry = (100, 100, 1255, 500)
         self.setGeometry(*self.window_geometry)
 
@@ -493,12 +518,72 @@ class MainWindow(QMainWindow):
                 self.cmds.version(broker)
             if text == "fw_crc":
                 self.cmds.fw_crc(broker)
+            if text == "sl_status":
+                self.cmds.sl_status(broker)
 
     def toggle_print(self, state):
-        if state == Qt.Checked:
-            self.boolVal = True
-        else:
-            self.boolVal = False
+        print(f"Print Toggle: {state}")
+        self.print = state
+
+    def set_parameters(self):
+        pass
+
+    def update_popup(self):
+        self.update_dialog = QDialog(self)
+        self.update_dialog.setWindowTitle("SolarLeaf")
+        self.update_dialog.setGeometry(*self.popup_geometry)
+
+        layout = QGridLayout()
+        labelS32 = QLineEdit()
+        labelS32.setObjectName("S32K")
+        labelS32.setPlaceholderText("S32K.bin")
+        updateS32 = QPushButton("Update S32K", clicked=lambda: self.update_unit("S32K"))
+        labelESP32 = QLineEdit()
+        labelS32.setObjectName("ESP32")
+        labelESP32.setPlaceholderText("ESP32.bin")
+        updateESP32 = QPushButton(
+            "Update ESP32", clicked=lambda: self.update_unit("ESP32")
+        )
+        labelBMS = QLineEdit()
+        labelS32.setObjectName("BMS")
+        labelBMS.setPlaceholderText("BMS.bin")
+        updateBMS = QPushButton("Update BMS", clicked=lambda: self.update_unit("BMS"))
+
+        layout.addWidget(labelS32, 0, 0)
+        layout.addWidget(updateS32, 0, 1)
+        layout.addWidget(labelESP32, 1, 0)
+        layout.addWidget(updateESP32, 1, 1)
+        layout.addWidget(labelBMS, 2, 0)
+        layout.addWidget(updateBMS, 2, 1)
+        self.update_dialog.setLayout(layout)
+        self.update_dialog.exec_()
+
+    def update_unit(self, name=""):
+        data = self.selected_unit()
+        if not data:
+            return
+
+        gateway, mac = (data[0], data[1])
+        broker = self.brokers[gateway]
+        binary_obj = self.update_dialog.findChildren(QLineEdit)
+        binary = [obj.text() for obj in binary_obj]
+
+        if not binary:
+            return
+        if ".bin" not in binary:
+            print("Invalid Binary File(s)")
+            return
+
+        print(f"Updating {name} of {mac} to '{binary}'")
+
+        if name == "S32K":
+            self.cmds.ota_S32K(broker, mac, binary[0])
+        elif name == "ESP32":
+            self.cmds.ota_ESP32(broker, mac, binary[1])
+        elif name == "BMS":
+            self.cmds.ota_BMS(broker, mac, binary[2])
+
+        # self.update_dialog.accept()
 
 
 class UpdateTableThread(QThread):
@@ -517,7 +602,6 @@ class UpdateTableThread(QThread):
         self.Leaves: dict[str, SolarLEAF] = dict()
 
     def run(self):
-        self.broker.publish(payload="getid")
         while True:
             while not self.broker.queue.empty():
                 data = self.broker.get()
@@ -559,10 +643,11 @@ class UpdateTableThread(QThread):
                 if "type" in (data := json.loads(msg.payload)):
                     [self.set_value(leaf, data, name) for name in config["list"]["names"]]
 
-                    # self.window.print:
-                    # print(data)
+                    if self.window.print:
+                        print(data)
             else:
-                print(payload)
+                if self.window.print:
+                    print(payload)
 
             return speed, leaf
 
@@ -654,6 +739,14 @@ class LineGraphDialog(QDialog):
             line[0].set_visible(self.checkboxes[i].isChecked())
 
         self.canvas.draw()
+
+
+class PopUp(QDialog):
+    def __init__(self, title="DEFAULT", parent=None):
+        super(PopUp, self).__init__(parent)
+
+        self.setWindowTitle(title)
+        self.setWindowIcon(QIcon("share/shield.png"))
 
 
 if __name__ == "__main__":
