@@ -6,12 +6,10 @@ import json
 import logging
 import numpy as np
 
-from typing import Dict
-
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
-from PyQt5.QtCore import pyqtSignal, QThread, QTimer
+from PyQt5.QtCore import pyqtSignal, QThread, QTimer, Qt
 from PyQt5.QtGui import QFont, QIcon, QColor, QBrush
 
 from PyQt5.QtWidgets import (
@@ -24,7 +22,6 @@ from PyQt5.QtWidgets import (
     QLineEdit,
     QDialog,
     QLabel,
-    QMenu,
     QTableWidget,
     QTableWidgetItem,
     QAction,
@@ -65,6 +62,32 @@ class Commands:
     def commit_ssid(self, broker, mac):
         broker.publish(f"Yotta/{mac}/cmd", payload=f"inv commit")
 
+    def getid(self, broker):
+        broker.publish(f"Yotta/cmd", payload="getid")
+
+    def version(self, broker):
+        broker.publish(f"Yotta/cmd", payload="version")
+
+    def fw_crc(self, broker):
+        broker.publish(f"Yotta/cmd", payload="get FW_CRC")
+
+    def sl_status(self, broker):
+        broker.publish(f"Yotta/cmd", payload="get sl_status")
+
+    def ota_BMS(self, broker, mac, binary=""):
+        if binary != "":
+            broker.publish(f"Yotta/{mac}/cmd", payload="")
+
+    def ota_S32K(self, broker, mac, binary=""):
+        if binary != "":
+            broker.publish(f"Yotta/{mac}/cmd", payload=f"pcimage {binary}")
+            time.sleep(3)
+            broker.publish(f"Yotta/{mac}cmd", payload=f"pcupdate")
+
+    def ota_ESP32(self, broker, mac, binary=""):
+        if binary != "":
+            broker.publish(f"Yotta/{mac}/cmd", payload=f"ota {binary}")
+
 
 class SolarLEAF:
     def __init__(self, gateway, macaddr, index):
@@ -90,8 +113,8 @@ class SolarLEAF:
             f"{self.gateway}",
             f"{self.mac:<12}",
             f"{self.BMS_SOC:5.1f}%",
-            f"{self.BMS_Min_Cell_V:5.1f}V",
-            f"{self.BMS_Max_Cell_V:5.1f}V",
+            f"{self.BMS_Min_Cell_V:5.2f}V",
+            f"{self.BMS_Max_Cell_V:5.2f}V",
             f"{self.VPV:5.1f}V",
             f"{self.IPV:6.1f}A",
             f"{self.P_PV:6.1f}W",
@@ -143,9 +166,7 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(QIcon("share/shield.png"))
 
         # Create and configure a tab widget
-        self.tabMenu = QTabWidget(
-            tabsClosable=True, tabCloseRequested=self.close_tab
-        )
+        self.tabMenu = QTabWidget(tabsClosable=True, tabCloseRequested=self.close_tab)
 
         self.setCentralWidget(self.tabMenu)
 
@@ -159,10 +180,42 @@ class MainWindow(QMainWindow):
         cMenu.addAction(QAction("Plot Fast", self, triggered=self.plot_fast))
         cMenu.addAction(QAction("Change SSID", self, triggered=self.ssid_popup))
 
+        pMenu = self.menuBar().addMenu("Print")
+        checkboxAction = QAction("Toggle Printing", self)
+        checkboxAction.triggered.connect(self.toggle_print)
+        checkboxAction.setCheckable(True)
+        pMenu.addAction(checkboxAction)
+        self.print = False
+
+        pMenu.addAction(
+            QAction("Get ID (MAC)", self, triggered=lambda: self.curr_tab("getid"))
+        )
+        pMenu.addAction(
+            QAction("Get SL Status", self, triggered=lambda: self.curr_tab("sl_status"))
+        )
+
+        pMenu.addAction(
+            QAction("ESP32 Version", self, triggered=lambda: self.curr_tab("version"))
+        )
+        pMenu.addAction(
+            QAction("S32 Version", self, triggered=lambda: self.curr_tab("fw_crc"))
+        )
+
+        uMenu = self.menuBar().addMenu("Update")
+        uMenu.addAction(QAction("Update", self, triggered=self.update_popup))
+
         # Set Geometry
-        self.popup_geometry = (100, 200, 200, 100)
+        self.popup_geometry = (100, 200, 300, 100)
         self.window_geometry = (100, 100, 1255, 500)
         self.setGeometry(*self.window_geometry)
+
+        # Start Timer to Update Window Every Second
+        # timer = QTimer()
+        # timer.timeout.connect(self.update_window)
+        # timer.start(1000)  # Update every second
+
+    def update_window(self):
+        pass
 
     def add_popup(self):
         self.gw_dialog = QDialog(self)
@@ -208,7 +261,7 @@ class MainWindow(QMainWindow):
 
         # Initialize Specific Broker
         broker = self.brokers[gateway]
-        thread = UpdateTableThread(broker, gateway, self.tabs)
+        thread = UpdateTableThread(self, broker, gateway, self.tabs)
         thread.slow_signal.connect(self.add_item_to_table)
         thread.start()
         self.threads[gateway] = thread
@@ -263,7 +316,7 @@ class MainWindow(QMainWindow):
 
             diff_time = time.time() - last_time
             if diff_time > TIMEOUT:
-                print(f"Timeout on mac {mac}")
+                # print(f"Timeout on mac {mac}")
                 for j in range(table.columnCount()):
                     table.item(i, j).setForeground(QBrush(QColor(255, 0, 0)))
             else:
@@ -375,7 +428,7 @@ class MainWindow(QMainWindow):
         print(f"Enabled fast data on {mac}")
 
         data_thread = self.threads[gateway]
-        dialog = LineGraphDialog(data_thread)
+        dialog = LineGraphDialog(data_thread, mac)
         dialog.exec_()
         time.sleep(1)
 
@@ -449,15 +502,99 @@ class MainWindow(QMainWindow):
         elif decision == "Cancel":
             self.decision = False
 
+    def curr_tab(self, text):
+        current_index = self.tabMenu.currentIndex()
+        try:
+            gateway = self.tabs[current_index]
+            broker = self.brokers[gateway]
+        except:
+            pass
+        else:
+            if text == "print":
+                self.print = not self.print
+            if text == "getid":
+                self.cmds.getid(broker)
+            if text == "version":
+                self.cmds.version(broker)
+            if text == "fw_crc":
+                self.cmds.fw_crc(broker)
+            if text == "sl_status":
+                self.cmds.sl_status(broker)
+
+    def toggle_print(self, state):
+        print(f"Print Toggle: {state}")
+        self.print = state
+
+    def set_parameters(self):
+        pass
+
+    def update_popup(self):
+        self.update_dialog = QDialog(self)
+        self.update_dialog.setWindowTitle("SolarLeaf")
+        self.update_dialog.setGeometry(*self.popup_geometry)
+
+        layout = QGridLayout()
+        labelS32 = QLineEdit()
+        labelS32.setObjectName("S32K")
+        labelS32.setPlaceholderText("S32K.bin")
+        updateS32 = QPushButton("Update S32K", clicked=lambda: self.update_unit("S32K"))
+        labelESP32 = QLineEdit()
+        labelS32.setObjectName("ESP32")
+        labelESP32.setPlaceholderText("ESP32.bin")
+        updateESP32 = QPushButton(
+            "Update ESP32", clicked=lambda: self.update_unit("ESP32")
+        )
+        labelBMS = QLineEdit()
+        labelS32.setObjectName("BMS")
+        labelBMS.setPlaceholderText("BMS.bin")
+        updateBMS = QPushButton("Update BMS", clicked=lambda: self.update_unit("BMS"))
+
+        layout.addWidget(labelS32, 0, 0)
+        layout.addWidget(updateS32, 0, 1)
+        layout.addWidget(labelESP32, 1, 0)
+        layout.addWidget(updateESP32, 1, 1)
+        layout.addWidget(labelBMS, 2, 0)
+        layout.addWidget(updateBMS, 2, 1)
+        self.update_dialog.setLayout(layout)
+        self.update_dialog.exec_()
+
+    def update_unit(self, name=""):
+        data = self.selected_unit()
+        if not data:
+            return
+
+        gateway, mac = (data[0], data[1])
+        broker = self.brokers[gateway]
+        binary_obj = self.update_dialog.findChildren(QLineEdit)
+        binary = [obj.text() for obj in binary_obj]
+
+        if not binary:
+            return
+        if ".bin" not in binary:
+            print("Invalid Binary File(s)")
+            return
+
+        print(f"Updating {name} of {mac} to '{binary}'")
+
+        if name == "S32K":
+            self.cmds.ota_S32K(broker, mac, binary[0])
+        elif name == "ESP32":
+            self.cmds.ota_ESP32(broker, mac, binary[1])
+        elif name == "BMS":
+            self.cmds.ota_BMS(broker, mac, binary[2])
+
+        # self.update_dialog.accept()
+
 
 class UpdateTableThread(QThread):
     slow_signal = pyqtSignal(str, SolarLEAF)
     plot_signal = pyqtSignal(str, SolarLEAF)
-    stop = pyqtSignal()
+    # stop = pyqtSignal()
 
-    def __init__(self, broker, gateway, tabs):
+    def __init__(self, window, broker, gateway, tabs):
         super().__init__()
 
+        self.window = window
         self.broker = broker
         self.gateway = gateway
         self.tabs = tabs
@@ -465,18 +602,18 @@ class UpdateTableThread(QThread):
         self.Leaves: dict[str, SolarLEAF] = dict()
 
     def run(self):
-        self.broker.publish(payload="getid")
         while True:
             while not self.broker.queue.empty():
                 data = self.broker.get()
 
                 try:
-                    items = self.process(self.gateway, data)
+                    speed, items = self.process(self.gateway, data)
                 except Exception as err:
                     print(f"UpdateTable Error: {err}")
                 else:
+                    if speed == "fast":
+                        self.plot_signal.emit(self.gateway, items)
                     self.slow_signal.emit(self.gateway, items)
-                    self.plot_signal.emit(self.gateway, items)
 
                 if self.gateway not in self.tabs.values():
                     print(f"Thread terminated for {self.gateway}")
@@ -497,22 +634,29 @@ class UpdateTableThread(QThread):
             leaf = self.Leaves.setdefault(mac, SolarLEAF(gateway, mac, index))
             leaf.last = time.time()
 
+            speed = ""
+            payload = json.loads(msg.payload)
+            if "type" in payload:
+                speed = payload["type"]
+
             if topic == "json":
                 if "type" in (data := json.loads(msg.payload)):
-                    [
-                        self.set_value(leaf, data, name)
-                        for name in config["list"]["names"]
-                    ]
-                    # print(data)
+                    [self.set_value(leaf, data, name) for name in config["list"]["names"]]
 
-            return leaf
+                    if self.window.print:
+                        print(data)
+            else:
+                if self.window.print:
+                    print(payload)
+
+            return speed, leaf
 
 
 class LineGraphDialog(QDialog):
-    def __init__(self, thread, parent=None):
+    def __init__(self, thread, mac, parent=None):
         super(LineGraphDialog, self).__init__(parent)
 
-        self.setWindowTitle("Fast Data")
+        self.setWindowTitle(f"Fast Data: {mac}")
         self.setWindowIcon(QIcon("share/shield.png"))
 
         thread.plot_signal.connect(self.update_plot)
@@ -595,6 +739,14 @@ class LineGraphDialog(QDialog):
             line[0].set_visible(self.checkboxes[i].isChecked())
 
         self.canvas.draw()
+
+
+class PopUp(QDialog):
+    def __init__(self, title="DEFAULT", parent=None):
+        super(PopUp, self).__init__(parent)
+
+        self.setWindowTitle(title)
+        self.setWindowIcon(QIcon("share/shield.png"))
 
 
 if __name__ == "__main__":
