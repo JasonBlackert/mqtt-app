@@ -48,6 +48,9 @@ FONT.setPointSize(FONT_SIZE)
 
 
 class Commands:
+    def set_value(self, broker, mac, cmd):
+        broker.publish(f"Yotta/{mac}/cmd", payload=cmd)
+
     def enable_fast(self, broker, mac):
         broker.publish(f"Yotta/{mac}/cmd", payload="set fast_period 1")
 
@@ -178,7 +181,9 @@ class MainWindow(QMainWindow):
         cMenu = self.menuBar().addMenu("Command")
         cMenu.addAction(QAction("Find Unit", self, triggered=self.find_popup))
         cMenu.addAction(QAction("Plot Fast", self, triggered=self.plot_fast))
+        cMenu.addAction(QAction("Update Unit", self, triggered=self.update_popup))
         cMenu.addAction(QAction("Change SSID", self, triggered=self.ssid_popup))
+        cMenu.addAction(QAction("Set Parameters", self, triggered=self.parameter_popup))
 
         pMenu = self.menuBar().addMenu("Print")
         checkboxAction = QAction("Toggle Printing", self)
@@ -200,9 +205,6 @@ class MainWindow(QMainWindow):
         pMenu.addAction(
             QAction("S32 Version", self, triggered=lambda: self.curr_tab("fw_crc"))
         )
-
-        uMenu = self.menuBar().addMenu("Update")
-        uMenu.addAction(QAction("Update", self, triggered=self.update_popup))
 
         # Set Geometry
         self.popup_geometry = (100, 200, 300, 100)
@@ -525,27 +527,91 @@ class MainWindow(QMainWindow):
         print(f"Print Toggle: {state}")
         self.print = state
 
-    def set_parameters(self):
-        pass
+    def parameter_popup(self):
+        data = self.selected_unit()
+        if not data:
+            return
+
+        self.parameter_dialog = QDialog(self)
+        self.parameter_dialog.setWindowTitle("Set Parameters")
+        self.parameter_dialog.setGeometry(*self.popup_geometry)
+
+        layout = QGridLayout()
+
+        portLine = QLineEdit()
+        portLine.setPlaceholderText("Port Number")
+
+        portComboBox = QComboBox()
+        portComboBox.addItem("port_on")
+        portComboBox.addItem("port_off")
+
+        portButton = QPushButton("Send", clicked=lambda: self.set_parameters("port"))
+
+        poutLine = QLineEdit()
+        poutLine.setPlaceholderText("Set P_OUT Value")
+
+        poutComboBox = QComboBox()
+        poutComboBox.addItem("P_OUT_MIN")
+        poutComboBox.addItem("P_OUT_MAX")
+
+        poutButton = QPushButton("Send", clicked=lambda: self.set_parameters("pout"))
+
+        layout.addWidget(portLine, 0, 0)
+        layout.addWidget(portComboBox, 0, 1)
+        layout.addWidget(portButton, 0, 2)
+        layout.addWidget(poutLine, 1, 0)
+        layout.addWidget(poutComboBox, 1, 1)
+        layout.addWidget(poutButton, 1, 2)
+
+        self.parameter_dialog.setLayout(layout)
+        self.parameter_dialog.exec_()
+
+    def set_parameters(self, name):
+        data = self.selected_unit()
+        if not data:
+            return
+
+        gateway, mac = (data[0], data[1])
+        broker = self.brokers[gateway]
+
+        comboboxes = [
+            obj.currentText() for obj in self.parameter_dialog.findChildren(QComboBox)
+        ]
+        linedit = [obj.text() for obj in self.parameter_dialog.findChildren(QLineEdit)]
+
+        if name == "port":
+            state = comboboxes[0]
+            number = linedit[0]
+        if name == "pout":
+            state = comboboxes[1]
+            number = linedit[1]
+
+        if type(number) != int:
+            print(f"value for {state} is not an integer")
+
+        cmd = f"{state} {number}"
+        print(f"Setting {cmd} on {mac}")
+        self.cmds.set_value(broker, mac, cmd)
 
     def update_popup(self):
+        data = self.selected_unit()
+        if not data:
+            return
+
         self.update_dialog = QDialog(self)
-        self.update_dialog.setWindowTitle("SolarLeaf")
+        self.update_dialog.setWindowTitle("Update Unit")
         self.update_dialog.setGeometry(*self.popup_geometry)
 
         layout = QGridLayout()
         labelS32 = QLineEdit()
-        labelS32.setObjectName("S32K")
         labelS32.setPlaceholderText("S32K.bin")
         updateS32 = QPushButton("Update S32K", clicked=lambda: self.update_unit("S32K"))
         labelESP32 = QLineEdit()
-        labelS32.setObjectName("ESP32")
         labelESP32.setPlaceholderText("ESP32.bin")
         updateESP32 = QPushButton(
             "Update ESP32", clicked=lambda: self.update_unit("ESP32")
         )
         labelBMS = QLineEdit()
-        labelS32.setObjectName("BMS")
         labelBMS.setPlaceholderText("BMS.bin")
         updateBMS = QPushButton("Update BMS", clicked=lambda: self.update_unit("BMS"))
 
