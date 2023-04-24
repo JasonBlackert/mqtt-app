@@ -47,51 +47,6 @@ FONT = QFont("Courier")
 FONT.setPointSize(FONT_SIZE)
 
 
-class Commands:
-    def set_value(self, broker, mac, cmd):
-        broker.publish(f"Yotta/{mac}/cmd", payload=cmd)
-
-    def enable_fast(self, broker, mac):
-        broker.publish(f"Yotta/{mac}/cmd", payload="set fast_period 1")
-
-    def disable_fast(self, broker, mac):
-        broker.publish(f"Yotta/{mac}/cmd", payload="set fast_period 0")
-
-    def change_ssid(self, broker, mac, ssid):
-        broker.publish(f"Yotta/{mac}/cmd", payload=f"inv ssid {ssid}")
-        time.sleep(3)
-        self.commit_ssid(broker, mac)
-
-    def commit_ssid(self, broker, mac):
-        broker.publish(f"Yotta/{mac}/cmd", payload=f"inv commit")
-
-    def getid(self, broker):
-        broker.publish(f"Yotta/cmd", payload="getid")
-
-    def version(self, broker):
-        broker.publish(f"Yotta/cmd", payload="version")
-
-    def fw_crc(self, broker):
-        broker.publish(f"Yotta/cmd", payload="get FW_CRC")
-
-    def sl_status(self, broker):
-        broker.publish(f"Yotta/cmd", payload="get sl_status")
-
-    def ota_BMS(self, broker, mac, binary=""):
-        if binary != "":
-            broker.publish(f"Yotta/{mac}/cmd", payload="")
-
-    def ota_S32K(self, broker, mac, binary=""):
-        if binary != "":
-            broker.publish(f"Yotta/{mac}/cmd", payload=f"pcimage {binary}")
-            time.sleep(3)
-            broker.publish(f"Yotta/{mac}cmd", payload=f"pcupdate")
-
-    def ota_ESP32(self, broker, mac, binary=""):
-        if binary != "":
-            broker.publish(f"Yotta/{mac}/cmd", payload=f"ota {binary}")
-
-
 class SolarLEAF:
     def __init__(self, gateway, macaddr, index):
         self.index = index
@@ -140,7 +95,6 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
-        self.cmds = Commands()
         self.brokers = self._init_brokers()
         self.tabs: dict[int, str] = dict()
         self.timers: dict[str, QTimer] = dict()
@@ -426,7 +380,7 @@ class MainWindow(QMainWindow):
         gateway, mac = (data[0], data[1])
         broker = self.brokers[gateway]
 
-        self.cmds.enable_fast(broker, mac)
+        broker.publish(f"Yotta/{mac}/cmd", payload="set fast_period 1")
         print(f"Enabled fast data on {mac}")
 
         data_thread = self.threads[gateway]
@@ -434,7 +388,7 @@ class MainWindow(QMainWindow):
         dialog.exec_()
         time.sleep(1)
 
-        self.cmds.disable_fast(broker, mac)
+        broker.publish(f"Yotta/{mac}/cmd", payload="set fast_period 0")
         print(f"Disabled fast data on {mac}")
 
     def ssid_popup(self):
@@ -493,7 +447,9 @@ class MainWindow(QMainWindow):
 
         print(f"Changing SSID of {mac} to '{ssid}'")
 
-        self.cmds.change_ssid(broker, mac, ssid)
+        broker.publish(f"Yotta/{mac}/cmd", payload=f"inv ssid {ssid}")
+        time.sleep(3)
+        broker.publish(f"Yotta/{mac}/cmd", payload=f"inv commit")
 
     def warning(self, decision="Cancel"):
         self.warning_dialog.accept()
@@ -515,13 +471,13 @@ class MainWindow(QMainWindow):
             if text == "print":
                 self.print = not self.print
             if text == "getid":
-                self.cmds.getid(broker)
+                broker.publish(f"Yotta/cmd", payload="getid")
             if text == "version":
-                self.cmds.version(broker)
+                broker.publish(f"Yotta/cmd", payload="version")
             if text == "fw_crc":
-                self.cmds.fw_crc(broker)
+                broker.publish(f"Yotta/cmd", payload="get FW_CRC")
             if text == "sl_status":
-                self.cmds.sl_status(broker)
+                broker.publish(f"Yotta/cmd", payload="get sl_status")
 
     def toggle_print(self, state):
         print(f"Print Toggle: {state}")
@@ -591,7 +547,7 @@ class MainWindow(QMainWindow):
 
         cmd = f"{state} {number}"
         print(f"Setting {cmd} on {mac}")
-        self.cmds.set_value(broker, mac, cmd)
+        broker.publish(f"Yotta/{mac}/cmd", payload=cmd)
 
     def update_popup(self):
         data = self.selected_unit()
@@ -642,12 +598,17 @@ class MainWindow(QMainWindow):
 
         print(f"Updating {name} of {mac} to '{binary}'")
 
+        if binary == "":  # Redundant
+            return
+
         if name == "S32K":
-            self.cmds.ota_S32K(broker, mac, binary[0])
+            broker.publish(f"Yotta/{mac}/cmd", payload=f"pcimage {binary}")
+            time.sleep(3)
+            broker.publish(f"Yotta/{mac}cmd", payload=f"pcupdate")
         elif name == "ESP32":
-            self.cmds.ota_ESP32(broker, mac, binary[1])
+            broker.publish(f"Yotta/{mac}/cmd", payload=f"ota {binary}")
         elif name == "BMS":
-            self.cmds.ota_BMS(broker, mac, binary[2])
+            broker.publish(f"Yotta/{mac}/cmd", payload="")
 
         # self.update_dialog.accept()
 
@@ -687,7 +648,7 @@ class UpdateTableThread(QThread):
 
                 time.sleep(0.1)
 
-    def set_value(self, leaf, data, name: str):
+    def select_value(self, leaf, data, name: str):
         if name in data.keys():
             setattr(leaf, name, data[name])
 
@@ -707,7 +668,10 @@ class UpdateTableThread(QThread):
 
             if topic == "json":
                 if "type" in (data := json.loads(msg.payload)):
-                    [self.set_value(leaf, data, name) for name in config["list"]["names"]]
+                    [
+                        self.select_value(leaf, data, name)
+                        for name in config["list"]["names"]
+                    ]
 
                     if self.window.print:
                         print(data)
